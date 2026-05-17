@@ -43,6 +43,15 @@ class VllmClient:
     async def version(self) -> dict:
         return await self._get("/version")
 
+    async def metrics_text(self) -> str:
+        response = await self._http.get("/metrics")
+        if response.status_code >= 400:
+            raise VllmHttpError(
+                status_code=response.status_code,
+                message=response.text,
+            )
+        return response.text
+
     async def chat_completion(self, body: dict) -> dict:
         return await self._post_json("/v1/chat/completions", body)
 

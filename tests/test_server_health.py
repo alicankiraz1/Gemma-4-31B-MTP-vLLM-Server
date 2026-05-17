@@ -46,3 +46,16 @@ def test_health_returns_profile_and_vllm_info():
     assert body["limits"]["max_output_tokens"] == 4096
     assert body["runtime"]["total_requests"] == 0
     assert body["model_aliases"]
+    assert body["tools_supported"] is False
+    assert body["multimodal_supported"] is False
+    assert body["streaming"] == {
+        "openai": "vllm_passthrough_sse",
+        "anthropic": "buffered_translation",
+    }
+    assert body["batching"] == {
+        "backend": "vllm_continuous_batching",
+        "gateway": "bounded_admission",
+    }
+    assert body["token_counting"] == "estimated_word_count"
+    assert "true_token_streaming" not in body
+    assert "continuous_batching" not in body

@@ -57,6 +57,38 @@ async def test_list_models_returns_payload():
 
 
 @pytest.mark.asyncio
+async def test_metrics_text_returns_raw_plain_text():
+    metrics = (
+        "# TYPE vllm:spec_decode_draft_acceptance_rate gauge\n"
+        "vllm:spec_decode_draft_acceptance_rate{model=\"gemma\"} 0.72\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/metrics"
+        return httpx.Response(
+            200,
+            content=metrics,
+            headers={"content-type": "text/plain; version=0.0.4"},
+        )
+
+    async with _client(handler) as client:
+        assert await client.metrics_text() == metrics
+
+
+@pytest.mark.asyncio
+async def test_metrics_text_error_raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/metrics"
+        return httpx.Response(503, text="metrics unavailable")
+
+    async with _client(handler) as client:
+        with pytest.raises(VllmHttpError) as exc:
+            await client.metrics_text()
+        assert exc.value.status_code == 503
+        assert str(exc.value) == "metrics unavailable"
+
+
+@pytest.mark.asyncio
 async def test_list_models_rejects_empty_success_body():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"

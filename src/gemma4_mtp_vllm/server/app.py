@@ -266,8 +266,15 @@ def create_app(
             "runtime": runtime_state.snapshot(),
             "auth_modes": ["bearer", "x-api-key"],
             "tools_supported": False,
-            "true_token_streaming": True,
-            "continuous_batching": True,
+            "multimodal_supported": False,
+            "streaming": {
+                "openai": "vllm_passthrough_sse",
+                "anthropic": "buffered_translation",
+            },
+            "batching": {
+                "backend": "vllm_continuous_batching",
+                "gateway": "bounded_admission",
+            },
             "token_counting": "estimated_word_count",
         }
 
