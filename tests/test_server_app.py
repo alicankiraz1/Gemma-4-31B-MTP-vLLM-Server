@@ -39,8 +39,10 @@ def test_readyz_requires_api_key():
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
     body = authorized.json()
-    assert body["status"] in {"ready", "degraded"}
+    assert body["status"] == "degraded"
+    assert body["version_ok"] is False
     assert body["vllm"]["status"] == "ok"
+    assert body["vllm"]["version"] == "0.11.0"
 
 
 def test_version_includes_gateway_and_vllm():

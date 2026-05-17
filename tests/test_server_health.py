@@ -35,11 +35,13 @@ def test_health_returns_profile_and_vllm_info():
     response = client.get("/health", headers={"x-api-key": "secret"})
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "ready"
+    assert body["status"] == "degraded"
     assert body["profile"] == "safe80"
     assert body["target_model"] == "google/gemma-4-31B-it"
     assert body["drafter"] == "google/gemma-4-31B-it-assistant"
     assert body["num_speculative_tokens"] == 4
+    assert body["required_vllm_min_version"] == "0.21.0"
+    assert body["version_ok"] is False
     assert body["vllm"]["status"] == "ok"
     assert body["vllm"]["version"] == "0.11.0"
     assert body["bind"]["host"] == "127.0.0.1"

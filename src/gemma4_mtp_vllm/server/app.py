@@ -38,6 +38,7 @@ from gemma4_mtp_vllm.server.validation import (
     validate_openai_chat_payload,
     validate_openai_completions_payload,
 )
+from gemma4_mtp_vllm.versioning import version_at_least
 
 DEFAULT_MODEL_ALIAS = "gemma-4-31b-mtp"
 DEFAULT_ANTHROPIC_MODEL_ALIAS = "claude-gemma-4-31b-mtp"
@@ -222,10 +223,16 @@ def create_app(
 
     @app.get("/readyz")
     async def readyz() -> dict[str, Any]:
-        vllm_status = await _probe_vllm(vllm)
-        readiness = "ready" if vllm_status.get("status") == "ok" else "degraded"
+        vllm_status, version_ok = await _probe_vllm_with_version(vllm)
+        readiness = (
+            "ready"
+            if vllm_status.get("status") == "ok" and version_ok
+            else "degraded"
+        )
         return {
             "status": readiness,
+            "required_vllm_min_version": REQUIRED_VLLM_MIN_VERSION,
+            "version_ok": version_ok,
             "vllm": vllm_status,
             "last_backend_error": runtime_state.last_backend_error,
         }
@@ -245,18 +252,18 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        vllm_status = await _probe_vllm(vllm)
-        if vllm_status.get("status") == "ok":
-            try:
-                version_body = await vllm.version()
-                vllm_status["version"] = version_body.get("version")
-            except VllmHttpError:
-                vllm_status["version"] = None
+        vllm_status, version_ok = await _probe_vllm_with_version(vllm)
         return {
-            "status": "ready" if vllm_status.get("status") == "ok" else "degraded",
+            "status": (
+                "ready"
+                if vllm_status.get("status") == "ok" and version_ok
+                else "degraded"
+            ),
             "profile": selected.name,
             "target_model": selected.target,
             "served_model_name": served_model_name,
+            "required_vllm_min_version": REQUIRED_VLLM_MIN_VERSION,
+            "version_ok": version_ok,
             "drafter": selected.drafter,
             "num_speculative_tokens": selected.num_speculative_tokens,
             "tensor_parallel_size": selected.tensor_parallel_size,
@@ -629,3 +636,19 @@ async def _probe_vllm(vllm: VllmClient) -> dict[str, Any]:
         return {"status": "unreachable", "http_status": exc.status_code}
     except httpx.HTTPError as exc:
         return {"status": "unreachable", "error": str(exc)}
+
+
+async def _probe_vllm_with_version(vllm: VllmClient) -> tuple[dict[str, Any], bool]:
+    vllm_status = await _probe_vllm(vllm)
+    if vllm_status.get("status") == "ok":
+        try:
+            version_body = await vllm.version()
+            vllm_status["version"] = version_body.get("version")
+        except VllmHttpError:
+            vllm_status["version"] = None
+
+    version_ok = version_at_least(
+        vllm_status.get("version"),
+        REQUIRED_VLLM_MIN_VERSION,
+    )
+    return vllm_status, version_ok
