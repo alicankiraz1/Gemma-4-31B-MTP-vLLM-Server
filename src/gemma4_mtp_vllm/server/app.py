@@ -9,9 +9,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from gemma4_mtp_vllm import REQUIRED_VLLM_MIN_VERSION, __version__
+from gemma4_mtp_vllm.anthropic_adapter import (
+    anthropic_request_to_openai,
+    openai_response_to_anthropic,
+    openai_stream_to_anthropic_events,
+)
 from gemma4_mtp_vllm.backend.vllm_client import VllmClient, VllmHttpError
 from gemma4_mtp_vllm.policy import (
     UnsupportedFeature,
+    validate_anthropic_request,
     validate_openai_request,
 )
 from gemma4_mtp_vllm.profiles import (
@@ -87,6 +93,28 @@ def _prepare_openai_body(
     body.pop("tool_choice", None)
     body.pop("response_format", None)
     return body
+
+
+async def openai_stream_to_anthropic_events_async(
+    iterator,
+    *,
+    anthropic_model: str,
+    message_id_prefix: str,
+    prompt_tokens: int,
+):
+    # v0.1 trade-off: buffer the full OpenAI stream into memory before
+    # converting to Anthropic events. The Anthropic translator is currently
+    # synchronous; a true streaming async generator is a follow-up.
+    chunks: list[dict] = []
+    async for chunk in iterator:
+        chunks.append(chunk)
+    for event in openai_stream_to_anthropic_events(
+        chunks,
+        anthropic_model=anthropic_model,
+        message_id_prefix=message_id_prefix,
+        prompt_tokens=prompt_tokens,
+    ):
+        yield event
 
 
 def create_app(
@@ -325,6 +353,117 @@ def create_app(
                 message=f"vllm returned {exc.status_code}",
             )
         return JSONResponse(response)
+
+    @app.post("/v1/messages")
+    async def anthropic_messages(request: Request):
+        payload = await _bounded_json(request, server_limits.max_body_bytes)
+        if isinstance(payload, JSONResponse):
+            return payload
+        try:
+            validate_anthropic_request(payload)
+        except UnsupportedFeature as exc:
+            return protocol_error_response(
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+                protocol="anthropic",
+            )
+        if not _alias_known(payload.get("model"), aliases):
+            return protocol_error_response(
+                status_code=404,
+                code="model_not_found",
+                message=f"model {payload.get('model')!r} is not available",
+                protocol="anthropic",
+            )
+
+        openai_body = anthropic_request_to_openai(
+            payload, openai_model=selected.target,
+        )
+        openai_body["max_tokens"] = min(
+            int(openai_body.get("max_tokens") or server_limits.max_output_tokens),
+            server_limits.max_output_tokens,
+        )
+
+        streaming = bool(payload.get("stream"))
+        if streaming:
+            async def event_stream():
+                prompt_tokens = 0
+                try:
+                    async for event in openai_stream_to_anthropic_events_async(
+                        vllm.chat_completion_stream(openai_body),
+                        anthropic_model=payload.get("model")
+                        or DEFAULT_ANTHROPIC_MODEL_ALIAS,
+                        message_id_prefix="msg",
+                        prompt_tokens=prompt_tokens,
+                    ):
+                        event_type = event.get("type", "message")
+                        yield f"event: {event_type}\n"
+                        yield f"data: {json.dumps(event)}\n\n"
+                except VllmHttpError as exc:
+                    runtime_state.record_backend_error("vllm_http_error")
+                    err = {
+                        "type": "error",
+                        "error": {
+                            "type": "backend_unavailable",
+                            "message": f"vllm returned {exc.status_code}",
+                        },
+                    }
+                    yield "event: error\n"
+                    yield f"data: {json.dumps(err)}\n\n"
+
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        try:
+            openai_response = await vllm.chat_completion(openai_body)
+        except VllmHttpError as exc:
+            runtime_state.record_backend_error("vllm_http_error")
+            return protocol_error_response(
+                status_code=503,
+                code="backend_unavailable",
+                message=f"vllm returned {exc.status_code}",
+                protocol="anthropic",
+            )
+
+        runtime_state.record_generation(
+            generation_tokens=int(
+                (openai_response.get("usage") or {}).get("completion_tokens") or 0
+            ),
+            generation_seconds=0.0,
+            batch_size=1,
+        )
+        anthropic_body = openai_response_to_anthropic(
+            openai_response,
+            anthropic_model=payload.get("model") or DEFAULT_ANTHROPIC_MODEL_ALIAS,
+            message_id_prefix="msg",
+        )
+        return JSONResponse(anthropic_body)
+
+    @app.post("/v1/messages/count_tokens")
+    async def anthropic_count_tokens(request: Request) -> JSONResponse:
+        payload = await _bounded_json(request, server_limits.max_body_bytes)
+        if isinstance(payload, JSONResponse):
+            return payload
+        try:
+            validate_anthropic_request(payload)
+        except UnsupportedFeature as exc:
+            return protocol_error_response(
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+                protocol="anthropic",
+            )
+        text = " ".join(
+            str(message.get("content", ""))
+            for message in payload.get("messages", [])
+            if isinstance(message, dict)
+        )
+        system = payload.get("system")
+        if isinstance(system, str):
+            text = f"{system} {text}"
+        return JSONResponse(
+            {"input_tokens": max(1, len(text.split()))},
+            headers={"X-Gemma4-MTP-Token-Counting": "estimated_word_count"},
+        )
 
     return app
 
