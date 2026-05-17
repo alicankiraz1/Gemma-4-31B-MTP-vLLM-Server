@@ -66,9 +66,12 @@ def _client():
 def test_models_endpoint_returns_aliases():
     response = _client().get("/v1/models", headers={"x-api-key": "secret"})
     assert response.status_code == 200
-    ids = {entry["id"] for entry in response.json()["data"]}
+    items = response.json()["data"]
+    ids = {entry["id"] for entry in items}
     assert "gemma-4-31b-mtp" in ids
     assert "claude-gemma-4-31b-mtp" in ids
+    for item in items:
+        assert item["display_name"] == "Gemma 4 31B MTP vLLM"
 
 
 def test_chat_completion_pass_through():

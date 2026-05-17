@@ -42,6 +42,7 @@ from gemma4_mtp_vllm.versioning import version_at_least
 
 DEFAULT_MODEL_ALIAS = "gemma-4-31b-mtp"
 DEFAULT_ANTHROPIC_MODEL_ALIAS = "claude-gemma-4-31b-mtp"
+MODEL_DISPLAY_NAME = "Gemma 4 31B MTP vLLM"
 DEFAULT_BIND_HOST = "127.0.0.1"
 PUBLIC_PATHS = {"/livez"}
 
@@ -318,7 +319,12 @@ def create_app(
         return {
             "object": "list",
             "data": [
-                {"id": alias, "object": "model", "owned_by": "local"}
+                {
+                    "id": alias,
+                    "object": "model",
+                    "owned_by": "local",
+                    "display_name": MODEL_DISPLAY_NAME,
+                }
                 for alias in aliases
             ],
         }
