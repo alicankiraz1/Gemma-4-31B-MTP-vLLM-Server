@@ -1,22 +1,55 @@
-# Gemma 4 31B MTP vLLM Sidecar Gateway
+# Gemma 4 31B MTP vLLM Server
 
-A FastAPI sidecar gateway in front of vLLM that runs Google Gemma 4 31B with
-the Gemma 4 MTP assistant drafter on NVIDIA CUDA or AMD ROCm hardware. The
-gateway adds OpenAI + Anthropic dual-protocol support, auth, rate limiting,
-bounded admission, doctor diagnostics, a reproducible MTP benchmark, and
-Prometheus metrics on top of the unmodified `vllm serve` process.
+A production-minded FastAPI sidecar for serving Gemma 4 31B on vLLM with
+Gemma 4 Multi-Token Prediction (MTP) speculative decoding. It keeps the raw
+`vllm serve` process private and adds OpenAI-compatible and Anthropic-compatible
+HTTP APIs, API-key auth, CORS controls, rate limiting, bounded admission,
+health/readiness diagnostics, release hygiene checks, and Prometheus-style
+gateway metrics.
 
-**Current status:** alpha. The gateway speaks OpenAI Chat / Completions and
-Anthropic Messages but does not yet implement tool/function calling,
-multimodal inputs, or tokenizer-exact token counting. See the
-**V1 Policy** section below for what is intentionally fail-fast in this
-release.
+The current release is an alpha focused on local/private GPU serving. It has
+been validated on a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`.
 
-## Architecture Overview
+## Verified Results
+
+### Real Hardware Smoke
+
+Validated on `2026-05-17` with:
+
+- Hardware: `2x NVIDIA GeForce RTX 5090`
+- Backend: `vllm 0.21.0`, tensor parallel size `2`
+- Served model alias: `gemma-4-31b-mtp`
+- Gateway: `127.0.0.1:18080`, upstream vLLM on `127.0.0.1:8010`
+
+Smoke results:
+
+- `/health`: `ready`, `version_ok: true`, backend version `0.21.0`
+- `/v1/models`: returned OpenAI model objects with `display_name`
+- `/v1/chat/completions`: `200 OK`
+- `/v1/chat/completions` streaming: `200 OK` and `[DONE]`
+- `/v1/messages`: `200 OK`
+- `/v1/messages/count_tokens`: `200 OK`
+- `/metrics`: `gemma4_mtp_backend_errors 0`
+
+### MTP Throughput
+
+Measured directly against the vLLM OpenAI endpoint with
+`min_tokens=max_tokens`, `ignore_eos=true`, one warmup request, and the same
+prompt for both runs.
+
+| Completion target | MTP tok/s | Baseline tok/s | Speedup |
+| --- | ---: | ---: | ---: |
+| 250 tokens | 136.27 | 62.74 | 2.17x |
+| 500 tokens | 130.71 | 62.96 | 2.08x |
+| 1000 tokens | 132.56 | 62.70 | 2.11x |
+
+The MTP service was restored after the benchmark and left healthy.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    clients["OpenAI / Anthropic compatible clients"]
+    clients["OpenAI / Anthropic-compatible clients"]
     gateway["FastAPI sidecar gateway"]
     guardrails["Auth, limits, rate limit, CORS, bind policy"]
     selector["Protocol router"]
@@ -24,7 +57,7 @@ flowchart LR
     anthropic_path["Anthropic adapter"]
     vllm_client["vLLM HTTP client"]
     vllm["vLLM OpenAI server (process)"]
-    target["Gemma 4 31B target model"]
+    target["Gemma 4 31B target"]
     drafter["Gemma 4 MTP assistant drafter"]
     diagnostics["/livez, /readyz, /health, /version, /metrics"]
     bench["MTP benchmark harness"]
@@ -45,9 +78,9 @@ flowchart LR
     doctor --> vllm_client
 ```
 
-## Default Profile (safe80)
+## Profiles
 
-Built for a single 80 GB NVIDIA GPU running Gemma 4 31B in BF16:
+The default `safe80` profile targets a single 80 GB-class GPU:
 
 - Target: `google/gemma-4-31B-it`
 - Drafter: `google/gemma-4-31B-it-assistant`
@@ -56,9 +89,11 @@ Built for a single 80 GB NVIDIA GPU running Gemma 4 31B in BF16:
 - `gpu_memory_utilization`: `0.90`
 - `max_model_len`: `32768`
 
-A `tp2` profile is also available for 2× 40+ GB GPUs (`tensor_parallel_size: 2`).
+A `tp2` profile is available for two 40+ GB GPUs (`tensor_parallel_size: 2`).
+The live validation above used the same served alias with tensor parallelism
+across two RTX 5090 GPUs.
 
-## vLLM Version
+## vLLM Requirement
 
 The gateway requires `vllm >= 0.21.0,<0.22.0` for Gemma 4 MTP. vLLM 0.21.0
 ships official Gemma 4 MTP speculative decoding support via PR #41745.
@@ -76,7 +111,7 @@ pip install "gemma4-mtp-vllm[vllm]"
 The gateway process itself does not import `vllm`; it only talks to a
 running `vllm serve` over HTTP.
 
-## Install
+## Quick Start
 
 ### Prerequisites
 
@@ -90,8 +125,8 @@ running `vllm serve` over HTTP.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-account>/Gemma-4-31B-MTP-vllm.git
-cd Gemma-4-31B-MTP-vllm
+git clone https://github.com/alicankiraz1/Gemma-4-31B-MTP-vLLM-Server.git
+cd Gemma-4-31B-MTP-vLLM-Server
 ```
 
 ### 2. Create and activate a virtual environment
@@ -126,7 +161,7 @@ uv pip install -U vllm --pre \
     --index-strategy unsafe-best-match
 ```
 
-### 4. Start vLLM in one terminal
+### 4. Start vLLM
 
 ```bash
 vllm-mtp launch --profile safe80 --host 127.0.0.1 --port 8000
@@ -134,13 +169,17 @@ vllm-mtp launch --profile safe80 --host 127.0.0.1 --port 8000
 
 This prints and executes the canonical `vllm serve` command for the chosen
 profile, including `--speculative-config` with the Gemma 4 MTP drafter. Use
-`--print-only` first to inspect the command without running it:
+`--print-only` first to inspect the exact command:
 
 ```bash
 vllm-mtp launch --profile safe80 --print-only
 ```
 
-### 5. Start the gateway in another terminal
+For raw vLLM exposure, keep `--host 127.0.0.1`. Passing a non-loopback host to
+`vllm-mtp launch` requires `--allow-public-vllm` because raw vLLM has no gateway
+auth, rate limiting, or CORS protection.
+
+### 5. Start the gateway
 
 ```bash
 vllm-mtp serve \
@@ -151,8 +190,8 @@ vllm-mtp serve \
     --vllm-base-url http://127.0.0.1:8000
 ```
 
-The gateway binds to `127.0.0.1` by default. Binding to `0.0.0.0` requires
-an `--api-key`.
+The gateway binds to `127.0.0.1` by default. Binding the gateway to `0.0.0.0`
+requires an `--api-key`.
 
 ## Doctor
 
@@ -163,7 +202,7 @@ the configured target model:
 vllm-mtp doctor --profile safe80 --vllm-base-url http://127.0.0.1:8000
 ```
 
-Expected output (single-line JSON):
+Expected output shape (single-line JSON):
 
 ```json
 {"ok": true, "profile": "safe80", "target_model": "google/gemma-4-31B-it", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 1, "gateway_version": "0.1.0", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true}
@@ -174,7 +213,7 @@ the target model is not listed in vLLM's `/v1/models`. Real vLLM reports the
 served target model there; the drafter is reported as configured by this
 gateway and `drafter_loaded` remains `unknown`.
 
-## Benchmark
+## Benchmarks
 
 The bench harness compares one vLLM process running with MTP enabled
 against a second vLLM process running without `--speculative-config`. The
@@ -223,7 +262,7 @@ vllm-mtp bench-matrix \
     --json-output bench-results/safe80-matrix.json
 ```
 
-### Known upstream caveat (Issue #41789)
+### Upstream caveat
 
 vLLM has reported very low draft acceptance rates (~0.2%) for Gemma 4 31B
 MTP in some setups. The bench harness measures this directly through
@@ -232,7 +271,9 @@ even with MTP enabled, you are likely hitting that upstream regression.
 See https://github.com/vllm-project/vllm/issues/41789 for the active
 discussion.
 
-## OpenAI-Compatible curl
+## API Examples
+
+### OpenAI-compatible chat
 
 ```bash
 curl -sS http://127.0.0.1:8080/v1/chat/completions \
@@ -249,7 +290,7 @@ curl -sS http://127.0.0.1:8080/v1/chat/completions \
     }' | python3 -m json.tool
 ```
 
-## Anthropic-Compatible curl
+### Anthropic-compatible messages
 
 ```bash
 curl -sS http://127.0.0.1:8080/v1/messages \
@@ -265,7 +306,7 @@ curl -sS http://127.0.0.1:8080/v1/messages \
     }' | python3 -m json.tool
 ```
 
-## V1 Policy
+## Alpha Policy
 
 The gateway is intentionally narrow in v0.1. The following request fields
 fail fast with `400 unsupported_feature` instead of being silently ignored
@@ -306,7 +347,9 @@ streaming buffers the upstream chunks before translation in v0.1.
   it has no gateway auth, rate limit, or CORS protection. Expose only the gateway
   for normal use.
 
-## Source Archives
+## Release Hygiene
+
+### Source Archives
 
 Release archives must come from this script or from CI. Do not publish manually created Finder or desktop zip files.
 Do not share a manually zipped working directory.
@@ -334,7 +377,7 @@ scripts/verify_source_archive.sh Gemma-4-31B-MTP-vllm-src.zip
 The verifier rejects `.git`, `.venv`, `dist`, `__MACOSX`, `__pycache__`, and
 build/cache entries.
 
-## Wheel Freshness
+### Wheel Freshness
 
 Before publishing or sharing a wheel, rebuild it from the current checkout
 and smoke-test the installed artifact:
@@ -347,7 +390,7 @@ The verifier removes stale wheels, builds a fresh one, installs it into a
 temporary virtual environment, and exercises `/livez`, `/health` (with
 api key), and basic endpoint shape using a fake vLLM transport.
 
-## Tests
+## Verification
 
 ```bash
 python -m pytest -q
@@ -356,24 +399,31 @@ python -m compileall -q src
 python -m build --wheel
 ```
 
-### Verification (2026-05-17)
+### Local Verification (2026-05-17)
 
-- `python -m pytest -q` → `154 passed`
+- `python -m pytest -q` -> `159 passed`
 - `python -m pip check` → `No broken requirements found.`
 - `python -m compileall -q src` → no errors
 - `python -m build --wheel` → built `gemma4_mtp_vllm-0.1.0-py3-none-any.whl`
 - `scripts/verify_wheel_freshness.sh` → `wheel smoke ok`
 - `scripts/make_source_archive.sh` + `scripts/verify_source_archive.sh` → archive clean
 
-Real-hardware vLLM smoke (running `vllm serve` against a real Gemma 4 31B
-GPU host and exercising the gateway end-to-end) is a documented follow-up
-and is not part of this verification run.
+159 tests cover profiles, server limits, bind policy, errors, runtime state,
+middleware, policy validation, request validation, vLLM HTTP client, Anthropic
+adapter, server app foundation, health, metrics, OpenAI endpoints, Anthropic
+endpoints, doctor, benchmarking, launch helper, CLI, bench CLI, versioning, and
+release scripts.
 
-154 tests cover profiles, server limits, bind policy, errors, runtime
-state, middleware, policy validation, vLLM HTTP client, Anthropic
-adapter, server app foundation, health, metrics, OpenAI endpoints,
-Anthropic endpoints, doctor, benchmarking, launch helper, CLI, bench
-CLI, and release scripts.
+## Operational Notes
+
+- The external model aliases are `gemma-4-31b-mtp`, `claude-gemma-4-31b-mtp`,
+  and `default`.
+- Gateway requests are routed upstream using the configured served vLLM model
+  name, so vLLM can be launched with `--served-model-name gemma-4-31b-mtp`.
+- `/health` and `/readyz` are version-aware and report degraded status when the
+  upstream vLLM version is older than `0.21.0`.
+- The gateway intentionally rejects unsupported tool, multimodal, and advanced
+  stop/format fields instead of silently dropping them.
 
 ## Author
 
