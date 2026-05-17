@@ -10,6 +10,30 @@ gateway metrics.
 The current release is an alpha focused on local/private GPU serving. It has
 been validated on a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`.
 
+## Performance Snapshot
+
+<div align="center">
+
+![MTP speedup](https://img.shields.io/badge/MTP_speedup-2.12x_average-00c2ff?style=for-the-badge)
+![1000 token throughput](https://img.shields.io/badge/1000_token_run-132.56_tok%2Fs-6ee7b7?style=for-the-badge)
+![Hardware](https://img.shields.io/badge/hardware-2x_RTX_5090-8b5cf6?style=for-the-badge)
+![vLLM](https://img.shields.io/badge/vLLM-0.21.0-f97316?style=for-the-badge)
+
+</div>
+
+| Scenario | Baseline Gemma 4 31B | Gemma 4 31B + MTP | Improvement |
+| --- | ---: | ---: | ---: |
+| 250 completion tokens | 62.74 tok/s | 136.27 tok/s | 2.17x |
+| 500 completion tokens | 62.96 tok/s | 130.71 tok/s | 2.08x |
+| 1000 completion tokens | 62.70 tok/s | 132.56 tok/s | 2.11x |
+
+| Validation Target | Result |
+| --- | --- |
+| Real hardware smoke | Passed on 2x RTX 5090 |
+| Gateway health | `ready`, `version_ok: true` |
+| OpenAI + Anthropic routes | Chat, stream, messages, count_tokens passed |
+| Backend errors after smoke | `gemma4_mtp_backend_errors 0` |
+
 ## Verified Results
 
 ### Real Hardware Smoke
