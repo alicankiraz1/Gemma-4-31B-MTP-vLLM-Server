@@ -1487,11 +1487,11 @@ def validate_anthropic_request(payload: dict[str, Any]) -> None:
 def _is_openai_noop(field: str, value: Any) -> bool:
     if field == "tools" and isinstance(value, list) and len(value) == 0:
         return True
-    if field == "tool_choice" and value in {None, "none"}:
+    if field == "tool_choice" and (value is None or value == "none"):
         return True
     if field == "functions" and isinstance(value, list) and len(value) == 0:
         return True
-    if field == "function_call" and value in {None, "none"}:
+    if field == "function_call" and (value is None or value == "none"):
         return True
     if field == "stop" and value is None:
         return True
