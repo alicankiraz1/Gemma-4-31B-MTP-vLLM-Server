@@ -1,5 +1,9 @@
 # Gemma 4 31B MTP vLLM Server
 
+<p align="center">
+  <img src="assets/gemma4-mtp-benchmark-card.png" alt="Gemma 4 31B MTP vLLM benchmark snapshot" width="100%">
+</p>
+
 A production-minded FastAPI sidecar for serving Gemma 4 31B on vLLM with
 Gemma 4 Multi-Token Prediction (MTP) speculative decoding. It keeps the raw
 `vllm serve` process private and adds OpenAI-compatible and Anthropic-compatible
