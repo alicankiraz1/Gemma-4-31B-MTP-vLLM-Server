@@ -352,7 +352,7 @@ python -m build --wheel
 
 ### Verification (2026-05-17)
 
-- `python -m pytest -q` → `100 passed`
+- `python -m pytest -q` → `154 passed`
 - `python -m pip check` → `No broken requirements found.`
 - `python -m compileall -q src` → no errors
 - `python -m build --wheel` → built `gemma4_mtp_vllm-0.1.0-py3-none-any.whl`
@@ -363,7 +363,7 @@ Real-hardware vLLM smoke (running `vllm serve` against a real Gemma 4 31B
 GPU host and exercising the gateway end-to-end) is a documented follow-up
 and is not part of this verification run.
 
-100 tests cover profiles, server limits, bind policy, errors, runtime
+154 tests cover profiles, server limits, bind policy, errors, runtime
 state, middleware, policy validation, vLLM HTTP client, Anthropic
 adapter, server app foundation, health, metrics, OpenAI endpoints,
 Anthropic endpoints, doctor, benchmarking, launch helper, CLI, bench
