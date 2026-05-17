@@ -136,9 +136,79 @@ def test_anthropic_rejects_tools():
         "/v1/messages",
         headers={"x-api-key": "secret", "content-type": "application/json"},
         json={
+            "model": "claude-gemma-4-31b-mtp",
+            "max_tokens": 4,
             "messages": [{"role": "user", "content": "Hi"}],
             "tools": [{"name": "calculator"}],
         },
     )
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "unsupported_feature"
+
+
+def test_anthropic_messages_rejects_bad_max_tokens():
+    forwarded = False
+
+    def handler(request):
+        nonlocal forwarded
+        forwarded = True
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = _vllm(handler)
+    response = client.post(
+        "/v1/messages",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "claude-gemma-4-31b-mtp",
+            "max_tokens": "bad",
+            "messages": [{"role": "user", "content": "Hi"}],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request"
+    assert forwarded is False
+
+
+def test_anthropic_messages_rejects_non_list_messages():
+    forwarded = False
+
+    def handler(request):
+        nonlocal forwarded
+        forwarded = True
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = _vllm(handler)
+    response = client.post(
+        "/v1/messages",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "claude-gemma-4-31b-mtp",
+            "max_tokens": 4,
+            "messages": "abc",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request"
+    assert forwarded is False
+
+
+def test_anthropic_count_tokens_rejects_non_list_messages():
+    forwarded = False
+
+    def handler(request):
+        nonlocal forwarded
+        forwarded = True
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = _vllm(handler)
+    response = client.post(
+        "/v1/messages/count_tokens",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "claude-gemma-4-31b-mtp",
+            "messages": "abc",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request"
+    assert forwarded is False

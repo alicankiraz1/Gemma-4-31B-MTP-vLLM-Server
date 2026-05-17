@@ -107,12 +107,34 @@ def test_chat_completion_rejects_tools():
         "/v1/chat/completions",
         headers={"x-api-key": "secret", "content-type": "application/json"},
         json={
+            "model": "gemma-4-31b-mtp",
             "messages": [{"role": "user", "content": "hi"}],
             "tools": [{"type": "function"}],
         },
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "unsupported_feature"
+
+
+@pytest.mark.parametrize("payload", [
+    {"model": "gemma-4-31b-mtp", "messages": "abc"},
+    {"model": [], "messages": [{"role": "user", "content": "hi"}]},
+    {
+        "model": "gemma-4-31b-mtp",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": "abc",
+    },
+])
+def test_chat_completion_rejects_malformed_payload_without_forwarding(payload: dict):
+    CAPTURED.clear()
+    response = _client().post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json=payload,
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert CAPTURED == {}
 
 
 def test_chat_completion_unknown_model_404():
@@ -205,3 +227,19 @@ def test_completions_endpoint():
     )
     assert response.status_code == 200
     assert response.json()["choices"][0]["text"] == "World"
+
+
+def test_completions_rejects_bad_max_tokens_without_forwarding():
+    CAPTURED.clear()
+    response = _client().post(
+        "/v1/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "prompt": "Hello",
+            "max_tokens": "abc",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert CAPTURED == {}

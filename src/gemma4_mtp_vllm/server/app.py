@@ -31,6 +31,13 @@ from gemma4_mtp_vllm.server.errors import protocol_error_response
 from gemma4_mtp_vllm.server.limits import ServerLimits
 from gemma4_mtp_vllm.server.middleware import install_request_boundary_middleware
 from gemma4_mtp_vllm.server.runtime_state import RuntimeState
+from gemma4_mtp_vllm.server.validation import (
+    RequestValidationError,
+    validate_anthropic_count_tokens_payload,
+    validate_anthropic_messages_payload,
+    validate_openai_chat_payload,
+    validate_openai_completions_payload,
+)
 
 DEFAULT_MODEL_ALIAS = "gemma-4-31b-mtp"
 DEFAULT_ANTHROPIC_MODEL_ALIAS = "claude-gemma-4-31b-mtp"
@@ -67,9 +74,22 @@ async def _bounded_json(
 
 
 def _alias_known(value: Any, aliases: Iterable[str]) -> bool:
-    if value is None:
-        return True
+    if not isinstance(value, str):
+        return False
     return value in set(aliases)
+
+
+def _validation_error_response(
+    exc: RequestValidationError,
+    *,
+    protocol: str = "openai",
+) -> JSONResponse:
+    return protocol_error_response(
+        status_code=exc.status_code,
+        code=exc.code,
+        message=exc.message,
+        protocol=protocol,
+    )
 
 
 def _prepare_openai_body(
@@ -271,7 +291,10 @@ def create_app(
         if isinstance(payload, JSONResponse):
             return payload
         try:
+            validate_openai_chat_payload(payload)
             validate_openai_request(payload, mtp_enabled=True)
+        except RequestValidationError as exc:
+            return _validation_error_response(exc)
         except UnsupportedFeature as exc:
             return protocol_error_response(
                 status_code=exc.status_code,
@@ -331,6 +354,10 @@ def create_app(
         payload = await _bounded_json(request, server_limits.max_body_bytes)
         if isinstance(payload, JSONResponse):
             return payload
+        try:
+            validate_openai_completions_payload(payload)
+        except RequestValidationError as exc:
+            return _validation_error_response(exc)
         if not _alias_known(payload.get("model"), aliases):
             return protocol_error_response(
                 status_code=404,
@@ -360,7 +387,10 @@ def create_app(
         if isinstance(payload, JSONResponse):
             return payload
         try:
+            validate_anthropic_messages_payload(payload)
             validate_anthropic_request(payload)
+        except RequestValidationError as exc:
+            return _validation_error_response(exc, protocol="anthropic")
         except UnsupportedFeature as exc:
             return protocol_error_response(
                 status_code=exc.status_code,
@@ -444,7 +474,10 @@ def create_app(
         if isinstance(payload, JSONResponse):
             return payload
         try:
+            validate_anthropic_count_tokens_payload(payload)
             validate_anthropic_request(payload)
+        except RequestValidationError as exc:
+            return _validation_error_response(exc, protocol="anthropic")
         except UnsupportedFeature as exc:
             return protocol_error_response(
                 status_code=exc.status_code,
