@@ -49,7 +49,7 @@ async def _build_report(
         try:
             models_body = await client.list_models()
             ids = {entry.get("id") for entry in models_body.get("data") or []}
-            target_served = profile.target in ids or profile.name in ids
+            target_served = profile.target in ids
         except (VllmHttpError, httpx.HTTPError):
             target_served = False
 

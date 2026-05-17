@@ -68,7 +68,7 @@ async def test_doctor_rejects_old_vllm_version():
 
 
 @pytest.mark.asyncio
-async def test_doctor_accepts_profile_name_as_served_target():
+async def test_doctor_rejects_profile_name_as_served_target():
     def handler(request):
         if request.url.path == "/health":
             return httpx.Response(200)
@@ -87,8 +87,8 @@ async def test_doctor_accepts_profile_name_as_served_target():
         vllm_base_url="http://vllm.local:8000",
         transport=httpx.MockTransport(handler),
     )
-    assert report["ok"] is True
-    assert report["target_served"] is True
+    assert report["ok"] is False
+    assert report["target_served"] is False
 
 
 @pytest.mark.asyncio

@@ -401,6 +401,11 @@ git commit -m "fix: handle real vllm health responses"
 
 ### Task 3: Doctor Semantics Without Drafter False Negative
 
+**Plan correction (2026-05-17):** `target_served` must require
+`profile.target` in `/v1/models`. Accepting `profile.name` would create a false
+positive because `launch.py` serves `profile.target`, and gateway upstream
+requests send `profile.target`.
+
 **Files:**
 - Modify: `src/gemma4_mtp_vllm/doctor.py`
 - Modify: `tests/test_doctor.py`
@@ -516,7 +521,7 @@ async def _build_report(
         try:
             models_body = await client.list_models()
             ids = {entry.get("id") for entry in models_body.get("data") or []}
-            target_served = profile.target in ids or profile.name in ids
+            target_served = profile.target in ids
         except (VllmHttpError, httpx.HTTPError):
             target_served = False
 
