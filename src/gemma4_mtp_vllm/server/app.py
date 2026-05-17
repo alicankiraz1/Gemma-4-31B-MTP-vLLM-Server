@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -9,6 +10,10 @@ from fastapi.responses import JSONResponse, Response
 
 from gemma4_mtp_vllm import REQUIRED_VLLM_MIN_VERSION, __version__
 from gemma4_mtp_vllm.backend.vllm_client import VllmClient, VllmHttpError
+from gemma4_mtp_vllm.policy import (
+    UnsupportedFeature,
+    validate_openai_request,
+)
 from gemma4_mtp_vllm.profiles import (
     ModelProfile,
     ProfileSet,
@@ -25,6 +30,63 @@ DEFAULT_MODEL_ALIAS = "gemma-4-31b-mtp"
 DEFAULT_ANTHROPIC_MODEL_ALIAS = "claude-gemma-4-31b-mtp"
 DEFAULT_BIND_HOST = "127.0.0.1"
 PUBLIC_PATHS = {"/livez"}
+
+
+async def _bounded_json(
+    request: Request,
+    max_bytes: int,
+) -> dict[str, Any] | JSONResponse:
+    body = await request.body()
+    if len(body) > max_bytes:
+        return protocol_error_response(
+            status_code=413,
+            code="request_too_large",
+            message=f"request body must be at most {max_bytes} bytes",
+        )
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return protocol_error_response(
+            status_code=400,
+            code="invalid_request",
+            message="request body must be valid JSON",
+        )
+    if not isinstance(parsed, dict):
+        return protocol_error_response(
+            status_code=400,
+            code="invalid_request",
+            message="request body must be a JSON object",
+        )
+    return parsed
+
+
+def _alias_known(value: Any, aliases: Iterable[str]) -> bool:
+    if value is None:
+        return True
+    return value in set(aliases)
+
+
+def _prepare_openai_body(
+    payload: dict[str, Any],
+    profile: ModelProfile,
+    limits: ServerLimits,
+) -> dict[str, Any]:
+    body = dict(payload)
+    body["model"] = profile.target
+    requested_max = body.get("max_tokens", limits.max_output_tokens)
+    if not isinstance(requested_max, int) or requested_max <= 0:
+        requested_max = limits.max_output_tokens
+    body["max_tokens"] = min(int(requested_max), limits.max_output_tokens)
+    body.setdefault("temperature", profile.temperature)
+    body.setdefault("top_p", profile.top_p)
+    if profile.top_k > 0 and "top_k" not in body:
+        body["top_k"] = profile.top_k
+    body.pop("tools", None)
+    body.pop("functions", None)
+    body.pop("function_call", None)
+    body.pop("tool_choice", None)
+    body.pop("response_format", None)
+    return body
 
 
 def create_app(
@@ -164,6 +226,54 @@ def create_app(
             f"gemma4_mtp_batch_requests_total {snapshot['batch_requests']}\n"
         )
         return Response(content=body, media_type="text/plain; version=0.0.4")
+
+    @app.get("/v1/models")
+    async def models() -> dict[str, Any]:
+        return {
+            "object": "list",
+            "data": [
+                {"id": alias, "object": "model", "owned_by": "local"}
+                for alias in aliases
+            ],
+        }
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> JSONResponse:
+        payload = await _bounded_json(request, server_limits.max_body_bytes)
+        if isinstance(payload, JSONResponse):
+            return payload
+        try:
+            validate_openai_request(payload, mtp_enabled=True)
+        except UnsupportedFeature as exc:
+            return protocol_error_response(
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+            )
+        if not _alias_known(payload.get("model"), aliases):
+            return protocol_error_response(
+                status_code=404,
+                code="model_not_found",
+                message=f"model {payload.get('model')!r} is not available",
+            )
+
+        body = _prepare_openai_body(payload, selected, server_limits)
+        try:
+            response = await vllm.chat_completion(body)
+        except VllmHttpError as exc:
+            runtime_state.record_backend_error("vllm_http_error")
+            return protocol_error_response(
+                status_code=503,
+                code="backend_unavailable",
+                message=f"vllm returned {exc.status_code}",
+            )
+
+        runtime_state.record_generation(
+            generation_tokens=int((response.get("usage") or {}).get("completion_tokens") or 0),
+            generation_seconds=0.0,
+            batch_size=1,
+        )
+        return JSONResponse(response)
 
     return app
 
