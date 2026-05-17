@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+allow_dirty=0
+if [[ "${1:-}" == "--allow-dirty" ]]; then
+    allow_dirty=1
+    shift
+fi
+
+if [[ "$allow_dirty" != "1" ]]; then
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "worktree is dirty; pass --allow-dirty for a non-release smoke" >&2
+        exit 1
+    fi
+fi
+
 python_bin="${PYTHON:-}"
 if [[ -z "$python_bin" ]]; then
     if [[ -x ".venv/bin/python" ]]; then

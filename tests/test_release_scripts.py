@@ -31,6 +31,17 @@ def test_wheel_freshness_script_contains_required_smoke_steps():
     assert "x-api-key" in script
     assert "local-dev-key" in script
     assert '"version": "0.21.0"' in script
+    assert "--allow-dirty" in script
+    assert "worktree is dirty" in script
+
+
+def test_release_scripts_refuse_dirty_worktrees():
+    make_script = Path("scripts/make_source_archive.sh").read_text(encoding="utf-8")
+    wheel_script = Path("scripts/verify_wheel_freshness.sh").read_text(encoding="utf-8")
+    for script in (make_script, wheel_script):
+        assert "git diff --quiet" in script
+        assert "git diff --cached --quiet" in script
+        assert "worktree is dirty" in script
 
 
 def test_readme_documents_vllm_mtp_release_requirement():
@@ -55,6 +66,8 @@ def test_readme_warns_against_manual_source_archives():
     readme = Path("README.md").read_text(encoding="utf-8")
     assert "Do not publish manually created Finder or desktop zip files" in readme
     assert "scripts/make_source_archive.sh" in readme
+    assert "Release artifact scripts refuse a dirty worktree" in readme
+    assert "--allow-dirty" in readme
     for path in (".git", ".venv", "dist", "__MACOSX", "__pycache__"):
         assert path in readme
     assert "build/cache entries" in readme

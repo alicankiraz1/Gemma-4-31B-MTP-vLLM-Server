@@ -307,6 +307,9 @@ streaming buffers the upstream chunks before translation in v0.1.
 
 Release archives must come from this script or from CI. Do not publish manually created Finder or desktop zip files.
 Do not share a manually zipped working directory.
+Release artifact scripts refuse a dirty worktree by default. Use `--allow-dirty`
+only for local wheel smoke checks; never publish artifacts created from a dirty
+workspace.
 
 ```bash
 scripts/make_source_archive.sh
