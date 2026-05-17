@@ -196,6 +196,58 @@ def test_anthropic_messages_queue_full_uses_anthropic_error_shape_without_forwar
     assert forwarded is False
 
 
+def test_anthropic_rate_limit_uses_anthropic_error_shape():
+    def handler(request):
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-x",
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 4,
+                        "completion_tokens": 1,
+                        "total_tokens": 5,
+                    },
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    app = create_app(
+        api_key="secret",
+        limits=ServerLimits(rate_limit_rpm=1),
+        vllm_base_url="http://vllm.local:8000",
+        vllm_transport=httpx.MockTransport(handler),
+    )
+    client = TestClient(app)
+    payload = {
+        "model": "claude-gemma-4-31b-mtp",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 4,
+    }
+
+    first = client.post(
+        "/v1/messages",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json=payload,
+    )
+    response = client.post(
+        "/v1/messages",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json=payload,
+    )
+
+    assert first.status_code == 200
+    assert response.status_code == 429
+    assert response.json()["type"] == "error"
+    assert response.json()["error"]["type"] == "rate_limited"
+
+
 def test_anthropic_count_tokens_uses_word_count():
     def handler(request):
         return httpx.Response(200, json={"status": "ok"})

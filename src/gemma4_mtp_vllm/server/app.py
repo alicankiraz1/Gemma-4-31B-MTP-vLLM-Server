@@ -193,14 +193,6 @@ def create_app(
     app.state.api_key = api_key
     app.state.bind_host = bind_host
 
-    install_request_boundary_middleware(
-        app,
-        limits=server_limits,
-        api_key=api_key,
-        public_paths=PUBLIC_PATHS,
-        runtime_state=runtime_state,
-    )
-
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next: Callable[[Request], Any]):
         if request.url.path in PUBLIC_PATHS:
@@ -209,6 +201,14 @@ def create_app(
         if auth_error is not None:
             return auth_error
         return await call_next(request)
+
+    install_request_boundary_middleware(
+        app,
+        limits=server_limits,
+        api_key=api_key,
+        public_paths=PUBLIC_PATHS,
+        runtime_state=runtime_state,
+    )
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
