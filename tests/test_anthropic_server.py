@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
 from fastapi.testclient import TestClient
 
 from gemma4_mtp_vllm.server.app import create_app
+from gemma4_mtp_vllm.server.limits import ServerLimits
 
 
 def _vllm(handler):
@@ -71,6 +73,48 @@ def test_anthropic_messages_returns_message_envelope():
     assert forwarded["max_tokens"] == 8
 
 
+def test_anthropic_messages_success_records_request_metrics():
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-x",
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 4,
+                        "completion_tokens": 1,
+                        "total_tokens": 5,
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    client = _vllm(handler)
+    response = client.post(
+        "/v1/messages",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "claude-gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "max_tokens": 8,
+        },
+    )
+
+    metrics = client.get("/metrics", headers={"x-api-key": "secret"}).text
+
+    assert response.status_code == 200
+    assert "gemma4_mtp_total_requests 1" in metrics
+    assert "gemma4_mtp_active_requests 0" in metrics
+
+
 def test_anthropic_messages_streaming():
     body = (
         b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"
@@ -106,6 +150,50 @@ def test_anthropic_messages_streaming():
     assert b"event: message_start" in body_bytes
     assert b"event: content_block_delta" in body_bytes
     assert b"event: message_stop" in body_bytes
+
+
+def test_anthropic_messages_queue_full_uses_anthropic_error_shape_without_forwarding():
+    forwarded = False
+
+    def handler(request):
+        nonlocal forwarded
+        if request.url.path == "/v1/chat/completions":
+            forwarded = True
+        return httpx.Response(200, json={"status": "ok"})
+
+    app = create_app(
+        api_key="secret",
+        limits=ServerLimits(max_queue_size=1),
+        vllm_base_url="http://vllm.local:8000",
+        vllm_transport=httpx.MockTransport(handler),
+    )
+
+    async def fill_queue():
+        return [
+            await app.state.runtime_state.acquire_generation_slot(),
+            await app.state.runtime_state.acquire_generation_slot(),
+        ]
+
+    slots = asyncio.run(fill_queue())
+    try:
+        response = TestClient(app).post(
+            "/v1/messages",
+            headers={"x-api-key": "secret", "content-type": "application/json"},
+            json={
+                "model": "claude-gemma-4-31b-mtp",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "max_tokens": 4,
+            },
+        )
+    finally:
+        for slot in slots:
+            slot.release()
+
+    body = response.json()
+    assert response.status_code == 429
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "queue_full"
+    assert forwarded is False
 
 
 def test_anthropic_count_tokens_uses_word_count():

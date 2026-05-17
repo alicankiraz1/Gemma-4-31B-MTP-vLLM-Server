@@ -30,7 +30,7 @@ from gemma4_mtp_vllm.server.bind_policy import bind_host_requires_api_key
 from gemma4_mtp_vllm.server.errors import protocol_error_response
 from gemma4_mtp_vllm.server.limits import ServerLimits
 from gemma4_mtp_vllm.server.middleware import install_request_boundary_middleware
-from gemma4_mtp_vllm.server.runtime_state import RuntimeState
+from gemma4_mtp_vllm.server.runtime_state import QueueFull, RuntimeState
 from gemma4_mtp_vllm.server.validation import (
     RequestValidationError,
     validate_anthropic_count_tokens_payload,
@@ -95,6 +95,22 @@ def _validation_error_response(
         message=exc.message,
         protocol=protocol,
     )
+
+
+async def _acquire_slot_or_error(
+    runtime_state: RuntimeState,
+    *,
+    protocol: str = "openai",
+) -> Any | JSONResponse:
+    try:
+        return await runtime_state.acquire_generation_slot()
+    except QueueFull:
+        return protocol_error_response(
+            status_code=429,
+            code="queue_full",
+            message="generation queue is full",
+            protocol=protocol,
+        )
 
 
 def _prepare_openai_body(
@@ -315,6 +331,9 @@ def create_app(
 
         body = _prepare_openai_body(payload, selected, server_limits)
         streaming = bool(payload.get("stream"))
+        slot = await _acquire_slot_or_error(runtime_state)
+        if isinstance(slot, JSONResponse):
+            return slot
 
         if streaming:
             async def event_stream():
@@ -334,6 +353,8 @@ def create_app(
                     }
                     yield f"data: {json.dumps(error)}\n\n"
                     yield "data: [DONE]\n\n"
+                finally:
+                    slot.release()
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -346,13 +367,17 @@ def create_app(
                 code="backend_unavailable",
                 message=f"vllm returned {exc.status_code}",
             )
-
-        runtime_state.record_generation(
-            generation_tokens=int((response.get("usage") or {}).get("completion_tokens") or 0),
-            generation_seconds=0.0,
-            batch_size=1,
-        )
-        return JSONResponse(response)
+        else:
+            runtime_state.record_generation(
+                generation_tokens=int(
+                    (response.get("usage") or {}).get("completion_tokens") or 0
+                ),
+                generation_seconds=0.0,
+                batch_size=1,
+            )
+            return JSONResponse(response)
+        finally:
+            slot.release()
 
     @app.post("/v1/completions")
     async def completions(request: Request) -> JSONResponse:
@@ -375,6 +400,9 @@ def create_app(
             int(body.get("max_tokens") or server_limits.max_output_tokens),
             server_limits.max_output_tokens,
         )
+        slot = await _acquire_slot_or_error(runtime_state)
+        if isinstance(slot, JSONResponse):
+            return slot
         try:
             response = await vllm.completion(body)
         except VllmHttpError as exc:
@@ -384,7 +412,17 @@ def create_app(
                 code="backend_unavailable",
                 message=f"vllm returned {exc.status_code}",
             )
-        return JSONResponse(response)
+        else:
+            runtime_state.record_generation(
+                generation_tokens=int(
+                    (response.get("usage") or {}).get("completion_tokens") or 0
+                ),
+                generation_seconds=0.0,
+                batch_size=1,
+            )
+            return JSONResponse(response)
+        finally:
+            slot.release()
 
     @app.post("/v1/messages")
     async def anthropic_messages(request: Request):
@@ -424,6 +462,10 @@ def create_app(
         )
 
         streaming = bool(payload.get("stream"))
+        slot = await _acquire_slot_or_error(runtime_state, protocol="anthropic")
+        if isinstance(slot, JSONResponse):
+            return slot
+
         if streaming:
             async def event_stream():
                 prompt_tokens = 0
@@ -449,6 +491,8 @@ def create_app(
                     }
                     yield "event: error\n"
                     yield f"data: {json.dumps(err)}\n\n"
+                finally:
+                    slot.release()
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -462,20 +506,22 @@ def create_app(
                 message=f"vllm returned {exc.status_code}",
                 protocol="anthropic",
             )
-
-        runtime_state.record_generation(
-            generation_tokens=int(
-                (openai_response.get("usage") or {}).get("completion_tokens") or 0
-            ),
-            generation_seconds=0.0,
-            batch_size=1,
-        )
-        anthropic_body = openai_response_to_anthropic(
-            openai_response,
-            anthropic_model=payload.get("model") or DEFAULT_ANTHROPIC_MODEL_ALIAS,
-            message_id_prefix="msg",
-        )
-        return JSONResponse(anthropic_body)
+        else:
+            runtime_state.record_generation(
+                generation_tokens=int(
+                    (openai_response.get("usage") or {}).get("completion_tokens") or 0
+                ),
+                generation_seconds=0.0,
+                batch_size=1,
+            )
+            anthropic_body = openai_response_to_anthropic(
+                openai_response,
+                anthropic_model=payload.get("model") or DEFAULT_ANTHROPIC_MODEL_ALIAS,
+                message_id_prefix="msg",
+            )
+            return JSONResponse(anthropic_body)
+        finally:
+            slot.release()
 
     @app.post("/v1/messages/count_tokens")
     async def anthropic_count_tokens(request: Request) -> JSONResponse:
