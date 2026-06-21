@@ -35,6 +35,20 @@ def test_launch_command_prints_shell_safe_mtp_argv():
     assert spec["method"] == "mtp"
 
 
+def test_launch_command_prints_homelander_smoke_args():
+    result = runner.invoke(
+        app,
+        ["launch", "--profile", "tp2_2x32_smoke", "--port", "8012", "--print-only"],
+    )
+
+    assert result.exit_code == 0
+    assert "--max-model-len 2048" in result.stdout
+    assert "--cpu-offload-gb 8" in result.stdout
+    assert "--max-num-seqs 1" in result.stdout
+    assert "--max-num-batched-tokens 4096" in result.stdout
+    assert "--enforce-eager" in result.stdout
+
+
 def test_launch_rejects_public_raw_vllm_without_explicit_allow():
     result = runner.invoke(app, ["launch", "--host", "0.0.0.0", "--print-only"])
     assert result.exit_code != 0
@@ -48,6 +62,31 @@ def test_launch_allows_public_raw_vllm_with_explicit_flag():
     )
     assert result.exit_code == 0
     assert "--host 0.0.0.0" in result.stdout
+
+
+def test_launch_writes_runtime_manifest_before_exec(monkeypatch, tmp_path):
+    manifest = tmp_path / "launch" / "manifest.json"
+
+    def fake_execvp(_program, _argv):
+        raise RuntimeError("exec intercepted")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.cli.os.execvp", fake_execvp)
+    result = runner.invoke(
+        app,
+        [
+            "launch",
+            "--profile",
+            "tp2_2x32_smoke",
+            "--manifest-path",
+            str(manifest),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert manifest.is_file()
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["profile"] == "tp2_2x32_smoke"
+    assert payload["argv"][0:3] == ["vllm", "serve", "google/gemma-4-31B-it"]
 
 
 def test_doctor_command_emits_json(monkeypatch):

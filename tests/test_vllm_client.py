@@ -140,6 +140,27 @@ async def test_chat_completion_error_raises():
 
 
 @pytest.mark.asyncio
+async def test_tokenize_returns_payload():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/tokenize"
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"count": 7, "tokens": [1, 2, 3]})
+
+    async with _client(handler) as client:
+        response = await client.tokenize(
+            {
+                "model": "gemma-4-31b-mtp",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+    assert response["count"] == 7
+    assert captured["body"]["messages"][0]["role"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_stream_yields_chunks():
     body = (
         "data: {\"id\":\"a\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"

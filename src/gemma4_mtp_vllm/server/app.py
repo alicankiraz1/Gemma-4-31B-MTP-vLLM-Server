@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -25,6 +27,12 @@ from gemma4_mtp_vllm.profiles import (
     ProfileSet,
     load_profiles,
     resolve_profile,
+)
+from gemma4_mtp_vllm.runtime_config import (
+    config_matches,
+    desired_config,
+    mtp_observed_from_metrics,
+    observed_config_from_models,
 )
 from gemma4_mtp_vllm.server.bind_policy import bind_host_requires_api_key
 from gemma4_mtp_vllm.server.errors import protocol_error_response
@@ -146,7 +154,7 @@ async def openai_stream_to_anthropic_events_async(
     message_id_prefix: str,
     prompt_tokens: int,
 ):
-    # v0.1 trade-off: buffer the full OpenAI stream into memory before
+    # Current alpha trade-off: buffer the full OpenAI stream into memory before
     # converting to Anthropic events. The Anthropic translator is currently
     # synchronous; a true streaming async generator is a follow-up.
     chunks: list[dict] = []
@@ -175,9 +183,9 @@ def create_app(
     if bind_host_requires_api_key(bind_host) and not api_key:
         raise ValueError(f"bind_host {bind_host} requires api_key")
 
-    server_limits = limits or ServerLimits()
     profile_set = load_profiles() if profiles is None else profiles
     selected = resolve_profile(profile_name, profile_set)
+    server_limits = limits or ServerLimits(max_output_tokens=selected.max_output_tokens)
     runtime_state = RuntimeState(max_queue_size=server_limits.max_queue_size)
     aliases = _aliases(profile_set, selected, model_alias)
     served_model_name = model_alias
@@ -185,7 +193,10 @@ def create_app(
     if vllm_transport is not None:
         http = httpx.AsyncClient(transport=vllm_transport, base_url=vllm_base_url)
     else:
-        http = httpx.AsyncClient(base_url=vllm_base_url, timeout=httpx.Timeout(120.0))
+        http = httpx.AsyncClient(
+            base_url=vllm_base_url,
+            timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=30.0),
+        )
     vllm = VllmClient(http=http, base_url=vllm_base_url)
 
     app = FastAPI(title="Gemma 4 31B MTP vLLM Gateway")
@@ -254,6 +265,13 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, Any]:
         vllm_status, version_ok = await _probe_vllm_with_version(vllm)
+        desired = desired_config(selected)
+        observed = await _observed_backend_config(
+            vllm,
+            selected,
+            served_model_name=served_model_name,
+        )
+        matches = config_matches(desired, observed)
         return {
             "status": (
                 "ready"
@@ -270,6 +288,11 @@ def create_app(
             "tensor_parallel_size": selected.tensor_parallel_size,
             "gpu_memory_utilization": selected.gpu_memory_utilization,
             "max_model_len": selected.max_model_len,
+            "desired_config": desired,
+            "observed_config": observed,
+            "config_matches": matches,
+            "target_served": observed.get("target_served", False),
+            "mtp_observed": observed.get("mtp_observed", False),
             "model_aliases": aliases,
             "vllm": vllm_status,
             "bind": {"host": bind_host},
@@ -286,7 +309,7 @@ def create_app(
                 "backend": "vllm_continuous_batching",
                 "gateway": "bounded_admission",
             },
-            "token_counting": "estimated_word_count",
+            "token_counting": "backend_tokenizer",
         }
 
     @app.get("/metrics")
@@ -365,11 +388,19 @@ def create_app(
 
         if streaming:
             async def event_stream():
+                start = time.perf_counter()
+                delta_tokens = 0
+                usage_tokens: int | None = None
+                stream_completed = False
                 try:
                     async for chunk in vllm.chat_completion_stream(body):
                         if chunk.get("_done"):
+                            stream_completed = True
                             yield "data: [DONE]\n\n"
                             return
+                        usage_tokens = _stream_usage_tokens(chunk, usage_tokens)
+                        if _chunk_has_content_delta(chunk):
+                            delta_tokens += 1
                         yield f"data: {json.dumps(chunk)}\n\n"
                 except VllmHttpError as exc:
                     runtime_state.record_backend_error("vllm_http_error")
@@ -382,25 +413,42 @@ def create_app(
                     yield f"data: {json.dumps(error)}\n\n"
                     yield "data: [DONE]\n\n"
                 finally:
+                    if stream_completed or delta_tokens > 0 or usage_tokens is not None:
+                        runtime_state.record_generation(
+                            generation_tokens=(
+                                usage_tokens
+                                if usage_tokens is not None
+                                else delta_tokens
+                            ),
+                            generation_seconds=time.perf_counter() - start,
+                            batch_size=1,
+                        )
                     slot.release()
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
         try:
-            response = await vllm.chat_completion(body)
-        except VllmHttpError as exc:
-            runtime_state.record_backend_error("vllm_http_error")
-            return protocol_error_response(
-                status_code=503,
-                code="backend_unavailable",
-                message=f"vllm returned {exc.status_code}",
+            start = time.perf_counter()
+            response = await _with_generation_timeout(
+                vllm.chat_completion(body),
+                server_limits.generation_timeout_seconds,
             )
+            elapsed = time.perf_counter() - start
+        except asyncio.TimeoutError:
+            runtime_state.record_backend_error("generation_timeout")
+            return protocol_error_response(
+                status_code=504,
+                code="backend_timeout",
+                message="generation exceeded gateway timeout",
+            )
+        except VllmHttpError as exc:
+            return _vllm_error_response(exc, runtime_state=runtime_state)
         else:
             runtime_state.record_generation(
                 generation_tokens=int(
                     (response.get("usage") or {}).get("completion_tokens") or 0
                 ),
-                generation_seconds=0.0,
+                generation_seconds=elapsed,
                 batch_size=1,
             )
             return JSONResponse(response)
@@ -432,20 +480,27 @@ def create_app(
         if isinstance(slot, JSONResponse):
             return slot
         try:
-            response = await vllm.completion(body)
-        except VllmHttpError as exc:
-            runtime_state.record_backend_error("vllm_http_error")
-            return protocol_error_response(
-                status_code=503,
-                code="backend_unavailable",
-                message=f"vllm returned {exc.status_code}",
+            start = time.perf_counter()
+            response = await _with_generation_timeout(
+                vllm.completion(body),
+                server_limits.generation_timeout_seconds,
             )
+            elapsed = time.perf_counter() - start
+        except asyncio.TimeoutError:
+            runtime_state.record_backend_error("generation_timeout")
+            return protocol_error_response(
+                status_code=504,
+                code="backend_timeout",
+                message="generation exceeded gateway timeout",
+            )
+        except VllmHttpError as exc:
+            return _vllm_error_response(exc, runtime_state=runtime_state)
         else:
             runtime_state.record_generation(
                 generation_tokens=int(
                     (response.get("usage") or {}).get("completion_tokens") or 0
                 ),
-                generation_seconds=0.0,
+                generation_seconds=elapsed,
                 batch_size=1,
             )
             return JSONResponse(response)
@@ -497,6 +552,10 @@ def create_app(
         if streaming:
             async def event_stream():
                 prompt_tokens = 0
+                start = time.perf_counter()
+                delta_tokens = 0
+                usage_tokens: int | None = None
+                stream_completed = False
                 try:
                     async for event in openai_stream_to_anthropic_events_async(
                         vllm.chat_completion_stream(openai_body),
@@ -505,6 +564,16 @@ def create_app(
                         message_id_prefix="msg",
                         prompt_tokens=prompt_tokens,
                     ):
+                        if event.get("type") == "content_block_delta":
+                            delta_tokens += 1
+                        if event.get("type") == "message_delta":
+                            usage = event.get("usage") or {}
+                            try:
+                                usage_tokens = int(usage.get("output_tokens"))
+                            except (TypeError, ValueError):
+                                pass
+                        if event.get("type") == "message_stop":
+                            stream_completed = True
                         event_type = event.get("type", "message")
                         yield f"event: {event_type}\n"
                         yield f"data: {json.dumps(event)}\n\n"
@@ -520,18 +589,39 @@ def create_app(
                     yield "event: error\n"
                     yield f"data: {json.dumps(err)}\n\n"
                 finally:
+                    if stream_completed or delta_tokens > 0 or usage_tokens is not None:
+                        runtime_state.record_generation(
+                            generation_tokens=(
+                                usage_tokens
+                                if usage_tokens is not None
+                                else delta_tokens
+                            ),
+                            generation_seconds=time.perf_counter() - start,
+                            batch_size=1,
+                        )
                     slot.release()
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
         try:
-            openai_response = await vllm.chat_completion(openai_body)
-        except VllmHttpError as exc:
-            runtime_state.record_backend_error("vllm_http_error")
+            start = time.perf_counter()
+            openai_response = await _with_generation_timeout(
+                vllm.chat_completion(openai_body),
+                server_limits.generation_timeout_seconds,
+            )
+            elapsed = time.perf_counter() - start
+        except asyncio.TimeoutError:
+            runtime_state.record_backend_error("generation_timeout")
             return protocol_error_response(
-                status_code=503,
-                code="backend_unavailable",
-                message=f"vllm returned {exc.status_code}",
+                status_code=504,
+                code="backend_timeout",
+                message="generation exceeded gateway timeout",
+                protocol="anthropic",
+            )
+        except VllmHttpError as exc:
+            return _vllm_error_response(
+                exc,
+                runtime_state=runtime_state,
                 protocol="anthropic",
             )
         else:
@@ -539,7 +629,7 @@ def create_app(
                 generation_tokens=int(
                     (openai_response.get("usage") or {}).get("completion_tokens") or 0
                 ),
-                generation_seconds=0.0,
+                generation_seconds=elapsed,
                 batch_size=1,
             )
             anthropic_body = openai_response_to_anthropic(
@@ -579,17 +669,35 @@ def create_app(
                 message=f"model {payload.get('model')!r} is not available",
                 protocol="anthropic",
             )
-        text = " ".join(
-            str(message.get("content", ""))
-            for message in payload.get("messages", [])
-            if isinstance(message, dict)
+        openai_body = anthropic_request_to_openai(
+            payload,
+            openai_model=served_model_name,
         )
-        system = payload.get("system")
-        if isinstance(system, str):
-            text = f"{system} {text}"
+        try:
+            tokenized = await vllm.tokenize(
+                {
+                    "model": served_model_name,
+                    "messages": openai_body.get("messages", []),
+                }
+            )
+            input_tokens = int(tokenized["count"])
+        except VllmHttpError as exc:
+            return _vllm_error_response(
+                exc,
+                runtime_state=runtime_state,
+                protocol="anthropic",
+            )
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            runtime_state.record_backend_error("tokenizer_unavailable")
+            return protocol_error_response(
+                status_code=503,
+                code="backend_unavailable",
+                message="vllm tokenizer endpoint is unavailable",
+                protocol="anthropic",
+            )
         return JSONResponse(
-            {"input_tokens": max(1, len(text.split()))},
-            headers={"X-Gemma4-MTP-Token-Counting": "estimated_word_count"},
+            {"input_tokens": max(0, input_tokens)},
+            headers={"X-Gemma4-MTP-Token-Counting": "backend_tokenizer"},
         )
 
     return app
@@ -630,6 +738,100 @@ def _auth_error(request: Request, api_key: str | None, path: str) -> JSONRespons
         code="unauthorized",
         message="missing or invalid API key",
     )
+
+
+async def _observed_backend_config(
+    vllm: VllmClient,
+    profile: ModelProfile,
+    *,
+    served_model_name: str | None,
+) -> dict[str, Any]:
+    observed: dict[str, Any] = {
+        "models": [],
+        "served_model_name": None,
+        "target_served": False,
+        "max_model_len": None,
+        "mtp_observed": False,
+    }
+    try:
+        models_body = await vllm.list_models()
+    except (VllmHttpError, httpx.HTTPError):
+        return observed
+
+    observed.update(
+        observed_config_from_models(
+            models_body,
+            target_model=profile.target,
+            served_model_name=served_model_name,
+        )
+    )
+    try:
+        observed["mtp_observed"] = mtp_observed_from_metrics(await vllm.metrics_text())
+    except (VllmHttpError, httpx.HTTPError):
+        observed["mtp_observed"] = False
+    return observed
+
+
+async def _with_generation_timeout(coro, timeout_seconds: float | None):
+    if timeout_seconds is None:
+        return await coro
+    return await asyncio.wait_for(coro, timeout=timeout_seconds)
+
+
+def _vllm_error_response(
+    exc: VllmHttpError,
+    *,
+    runtime_state: RuntimeState,
+    protocol: str = "openai",
+) -> JSONResponse:
+    code, message = _upstream_error_details(exc)
+    if 400 <= exc.status_code < 500:
+        return protocol_error_response(
+            status_code=exc.status_code,
+            code=code,
+            message=message,
+            protocol=protocol,
+        )
+    runtime_state.record_backend_error("vllm_http_error")
+    return protocol_error_response(
+        status_code=503,
+        code="backend_unavailable",
+        message=f"vllm returned {exc.status_code}",
+        protocol=protocol,
+    )
+
+
+def _upstream_error_details(exc: VllmHttpError) -> tuple[str, str]:
+    try:
+        body = json.loads(str(exc))
+    except json.JSONDecodeError:
+        return "upstream_error", str(exc)
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return "upstream_error", str(exc)
+    code = error.get("code") or error.get("type") or "upstream_error"
+    message = error.get("message") or str(exc)
+    return str(code), str(message)
+
+
+def _stream_usage_tokens(chunk: dict[str, Any], current: int | None) -> int | None:
+    usage = chunk.get("usage")
+    if not isinstance(usage, dict):
+        return current
+    try:
+        return int(usage.get("completion_tokens"))
+    except (TypeError, ValueError):
+        return current
+
+
+def _chunk_has_content_delta(chunk: dict[str, Any]) -> bool:
+    for choice in chunk.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta") or {}
+        if isinstance(delta, dict) and delta.get("content"):
+            return True
+    return False
 
 
 async def _probe_vllm(vllm: VllmClient) -> dict[str, Any]:

@@ -23,7 +23,11 @@ from gemma4_mtp_vllm.benchmarking import (
     speedup,
 )
 from gemma4_mtp_vllm.doctor import build_report
-from gemma4_mtp_vllm.launch import build_vllm_serve_args
+from gemma4_mtp_vllm.launch import (
+    build_vllm_serve_args,
+    resolve_vllm_executable,
+    write_launch_manifest,
+)
 from gemma4_mtp_vllm.profiles import (
     ModelProfile,
     ProfileSet,
@@ -73,9 +77,15 @@ def _http_client(base_url: str) -> httpx.AsyncClient:
     transport = _build_transport()
     if transport is not None:
         return httpx.AsyncClient(
-            transport=transport, base_url=base_url, timeout=120.0
+            transport=transport,
+            base_url=base_url,
+            timeout=_vllm_http_timeout(),
         )
-    return httpx.AsyncClient(base_url=base_url, timeout=120.0)
+    return httpx.AsyncClient(base_url=base_url, timeout=_vllm_http_timeout())
+
+
+def _vllm_http_timeout() -> httpx.Timeout:
+    return httpx.Timeout(connect=10.0, read=None, write=30.0, pool=30.0)
 
 
 async def _measure(
@@ -171,6 +181,10 @@ def launch(
     print_only: bool = typer.Option(False, "--print-only"),
     no_mtp: bool = typer.Option(False, "--no-mtp"),
     allow_public_vllm: bool = typer.Option(False, "--allow-public-vllm"),
+    manifest_path: Optional[Path] = typer.Option(
+        Path("logs/vllm-launch-manifest.json"),
+        "--manifest-path",
+    ),
 ) -> None:
     if bind_host_requires_api_key(host) and not allow_public_vllm:
         typer.echo(
@@ -190,7 +204,15 @@ def launch(
     if print_only:
         typer.echo(shlex.join(args))
         return
-    os.execvp(args[0], args)
+    if manifest_path is not None:
+        write_launch_manifest(
+            path=manifest_path,
+            profile=selected,
+            argv=args,
+            enable_mtp=not no_mtp,
+            served_model_name=DEFAULT_MODEL_ALIAS,
+        )
+    os.execvp(resolve_vllm_executable(args[0]), args)
 
 
 @app.command()
@@ -200,9 +222,13 @@ def serve(
     port: int = typer.Option(8080, "--port"),
     api_key: Optional[str] = typer.Option(None, "--api-key"),
     max_body_mb: float = typer.Option(2.0, "--max-body-mb"),
-    max_output_tokens: int = typer.Option(4096, "--max-output-tokens"),
+    max_output_tokens: Optional[int] = typer.Option(None, "--max-output-tokens"),
     max_queue_size: int = typer.Option(8, "--max-queue-size"),
     rate_limit_rpm: int = typer.Option(30, "--rate-limit-rpm"),
+    generation_timeout_seconds: Optional[float] = typer.Option(
+        900.0,
+        "--generation-timeout-seconds",
+    ),
     vllm_base_url: str = typer.Option(
         "http://127.0.0.1:8000", "--vllm-base-url"
     ),
@@ -212,16 +238,17 @@ def serve(
         typer.echo(f"host {host} requires --api-key", err=True)
         raise typer.Exit(code=1)
 
+    selected = resolve_profile(profile, _profile_set())
     limits = ServerLimits(
         max_body_bytes=int(max_body_mb * 1024 * 1024),
-        max_output_tokens=max_output_tokens,
+        max_output_tokens=max_output_tokens or selected.max_output_tokens,
         max_queue_size=max_queue_size,
         rate_limit_rpm=rate_limit_rpm,
         cors_origins=tuple(cors_origin),
+        generation_timeout_seconds=generation_timeout_seconds,
     )
-    selected_profile_name = profile
     fastapi_app = create_app(
-        profile_name=selected_profile_name,
+        profile_name=selected.name,
         bind_host=host,
         api_key=api_key,
         limits=limits,
@@ -240,7 +267,11 @@ def generate(
     vllm_base_url: str = typer.Option(
         "http://127.0.0.1:8000", "--vllm-base-url"
     ),
-    no_mtp: bool = typer.Option(False, "--no-mtp", help="Disabled in v0.1: requires separate vLLM launch."),
+    no_mtp: bool = typer.Option(
+        False,
+        "--no-mtp",
+        help="Requires a separate vLLM launch without speculative config.",
+    ),
 ) -> None:
     """One-shot generation via the configured vLLM server."""
     if no_mtp:
@@ -254,7 +285,10 @@ def generate(
     selected = resolve_profile(profile, _profile_set())
 
     async def run() -> dict:
-        async with httpx.AsyncClient(base_url=vllm_base_url, timeout=120.0) as http:
+        async with httpx.AsyncClient(
+            base_url=vllm_base_url,
+            timeout=_vllm_http_timeout(),
+        ) as http:
             response = await http.post(
                 "/v1/chat/completions",
                 json={
@@ -321,11 +355,16 @@ def bench(
 @app.command("bench-matrix")
 def bench_matrix(
     profile: str = typer.Option("safe80", "--profile"),
-    mtp_url: str = typer.Option(..., "--mtp-url"),
+    mtp_url: Optional[str] = typer.Option(None, "--mtp-url"),
     baseline_url: str = typer.Option(..., "--baseline-url"),
     prompt: list[str] = typer.Option([], "--prompt"),
     num_speculative_tokens: list[int] = typer.Option(
         [], "--num-speculative-tokens"
+    ),
+    depth_mtp_url: list[str] = typer.Option(
+        [],
+        "--depth-mtp-url",
+        help="Depth-specific MTP endpoint as N=URL; required for multi-depth sweeps.",
     ),
     runs: int = typer.Option(3, "--runs"),
     warmup_runs: int = typer.Option(1, "--warmup-runs"),
@@ -341,6 +380,27 @@ def bench_matrix(
     if any(value <= 0 for value in num_speculative_tokens):
         typer.echo("--num-speculative-tokens must be positive", err=True)
         raise typer.Exit(code=2)
+    mtp_urls = _parse_depth_mtp_urls(depth_mtp_url)
+    if mtp_urls:
+        missing = [n for n in num_speculative_tokens if n not in mtp_urls]
+        if missing:
+            typer.echo(
+                "missing --depth-mtp-url for num_speculative_tokens: "
+                + ", ".join(str(n) for n in missing),
+                err=True,
+            )
+            raise typer.Exit(code=2)
+    elif len(set(num_speculative_tokens)) > 1:
+        typer.echo(
+            "multi-depth bench-matrix requires --depth-mtp-url N=URL for each "
+            "--num-speculative-tokens; a single --mtp-url cannot change live "
+            "vLLM speculative depth",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    elif mtp_url is None:
+        typer.echo("--mtp-url is required unless --depth-mtp-url is provided", err=True)
+        raise typer.Exit(code=2)
 
     selected_base = resolve_profile(profile, _profile_set())
     results: list[dict] = []
@@ -351,12 +411,16 @@ def bench_matrix(
             # dataclasses.replace() is the canonical copy-with-override for
             # frozen dataclasses; avoids touching the private __dict__.
             adjusted = replace(selected_base, num_speculative_tokens=n)
+            selected_mtp_url = mtp_urls.get(n) or mtp_url
+            if selected_mtp_url is None:
+                typer.echo("missing MTP URL", err=True)
+                raise typer.Exit(code=2)
             observations = asyncio.run(
                 _single_bench(
                     profile=adjusted,
                     prompt=prompt_value,
                     max_tokens=64,
-                    mtp_url=mtp_url,
+                    mtp_url=selected_mtp_url,
                     baseline_url=baseline_url,
                     runs=runs,
                     warmup_runs=warmup_runs,
@@ -381,3 +445,22 @@ def bench_matrix(
     if json_output:
         Path(json_output).write_text(rendered, encoding="utf-8")
     typer.echo(rendered)
+
+
+def _parse_depth_mtp_urls(values: list[str]) -> dict[int, str]:
+    result: dict[int, str] = {}
+    for value in values:
+        if "=" not in value:
+            typer.echo("--depth-mtp-url must use N=URL", err=True)
+            raise typer.Exit(code=2)
+        raw_depth, url = value.split("=", 1)
+        try:
+            depth = int(raw_depth)
+        except ValueError:
+            typer.echo("--depth-mtp-url depth must be an integer", err=True)
+            raise typer.Exit(code=2)
+        if depth <= 0 or not url:
+            typer.echo("--depth-mtp-url must use positive N=URL", err=True)
+            raise typer.Exit(code=2)
+        result[depth] = url
+    return result

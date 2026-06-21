@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Iterable, Iterator
 
+from gemma4_mtp_vllm.backend.response_parser import visible_text_for_history
+
 
 def anthropic_request_to_openai(
     payload: dict[str, Any],
@@ -120,10 +122,14 @@ def _build_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
         for message in raw_messages:
             if not isinstance(message, dict):
                 continue
+            role = str(message.get("role") or "user")
+            content = _content_to_text(message.get("content"))
+            if role == "assistant":
+                content = visible_text_for_history(content)
             messages.append(
                 {
-                    "role": str(message.get("role") or "user"),
-                    "content": _content_to_text(message.get("content")),
+                    "role": role,
+                    "content": content,
                 }
             )
     return messages
@@ -149,7 +155,7 @@ def _extract_message_content(choice: dict[str, Any]) -> str:
     message = choice.get("message") or {}
     content = message.get("content")
     if isinstance(content, str):
-        return content
+        return visible_text_for_history(content)
     return ""
 
 

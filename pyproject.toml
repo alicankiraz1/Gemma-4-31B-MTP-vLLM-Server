@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gemma4-mtp-vllm"
-version = "0.1.0"
+version = "0.2.0a1"
 description = "Gemma 4 31B MTP local API gateway on vLLM"
 license = "Apache-2.0"
 authors = [
@@ -35,7 +35,9 @@ dev = [
     "tomli>=2; python_version<'3.11'",
 ]
 vllm = [
-    "vllm>=0.21.0,<0.22.0",
+    "vllm==0.21.0",
+    "fastapi>=0.115,<0.137",
+    "prometheus-fastapi-instrumentator==7.1.0",
 ]
 
 [project.scripts]

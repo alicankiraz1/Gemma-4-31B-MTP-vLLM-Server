@@ -3,7 +3,7 @@ set -euo pipefail
 
 output="${1:-Gemma-4-31B-MTP-vllm-src.zip}"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
     echo "worktree is dirty; refusing to create release archive" >&2
     exit 1
 fi

@@ -109,6 +109,12 @@ def test_chat_completion_success_records_request_metrics():
     assert response.status_code == 200
     assert "gemma4_mtp_total_requests 1" in metrics
     assert "gemma4_mtp_active_requests 0" in metrics
+    generation_seconds = next(
+        float(line.rsplit(" ", 1)[1])
+        for line in metrics.splitlines()
+        if line.startswith("gemma4_mtp_generation_seconds_total ")
+    )
+    assert generation_seconds > 0
 
 
 def test_chat_completion_caps_max_tokens_at_limit():
@@ -124,6 +130,72 @@ def test_chat_completion_caps_max_tokens_at_limit():
     )
     assert response.status_code == 200
     assert CAPTURED["body"]["max_tokens"] == 4096
+
+
+def test_chat_completion_preserves_upstream_4xx_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "context_length_exceeded",
+                        "message": "too many tokens",
+                    }
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 32,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "context_length_exceeded"
+    metrics = client.get("/metrics", headers={"x-api-key": "secret"}).text
+    assert "gemma4_mtp_backend_errors 0" in metrics
+
+
+def test_chat_completion_generation_timeout_returns_504():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            await asyncio.sleep(0.05)
+            return httpx.Response(200, json={"choices": [], "usage": {}})
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            limits=ServerLimits(generation_timeout_seconds=0.001),
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 32,
+        },
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "backend_timeout"
 
 
 def test_chat_completion_rejects_tools():
@@ -258,6 +330,13 @@ def test_chat_completion_streaming_releases_request_slot_after_consumption():
     metrics = client.get("/metrics", headers={"x-api-key": "secret"}).text
     assert "gemma4_mtp_total_requests 1" in metrics
     assert "gemma4_mtp_active_requests 0" in metrics
+    assert "gemma4_mtp_generation_tokens_total 1" in metrics
+    generation_seconds = next(
+        float(line.split()[-1])
+        for line in metrics.splitlines()
+        if line.startswith("gemma4_mtp_generation_seconds_total ")
+    )
+    assert generation_seconds > 0
 
 
 def test_chat_completion_queue_full_rejects_without_forwarding():

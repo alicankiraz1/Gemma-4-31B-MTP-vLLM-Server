@@ -15,6 +15,8 @@ profiles:
     top_p: 1.0
     top_k: 0
     requires_vram_gb: 80
+    validation_level: unverified
+    max_output_tokens: 4096
   tp2:
     target: google/gemma-4-31B-it
     drafter: google/gemma-4-31B-it-assistant
@@ -26,3 +28,42 @@ profiles:
     top_p: 1.0
     top_k: 0
     requires_vram_gb: 40
+    validation_level: unverified
+    max_output_tokens: 4096
+  tp2_2x32_smoke:
+    target: google/gemma-4-31B-it
+    drafter: google/gemma-4-31B-it-assistant
+    num_speculative_tokens: 4
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.95
+    max_model_len: 2048
+    temperature: 0.0
+    top_p: 1.0
+    top_k: 0
+    requires_vram_gb: 32
+    cpu_offload_gb: 8
+    max_num_seqs: 1
+    max_num_batched_tokens: 4096
+    enforce_eager: true
+    language_model_only: false
+    validation_level: smoke
+    max_output_tokens: 1024
+  tp2_2x32_fp8_gpuonly:
+    target: google/gemma-4-31B-it
+    drafter: google/gemma-4-31B-it-assistant
+    num_speculative_tokens: 4
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.95
+    max_model_len: 2048
+    temperature: 0.0
+    top_p: 1.0
+    top_k: 0
+    requires_vram_gb: 32
+    cpu_offload_gb: 0
+    max_num_seqs: 1
+    max_num_batched_tokens: 4096
+    enforce_eager: true
+    language_model_only: false
+    validation_level: smoke
+    max_output_tokens: 1024
+    quantization: fp8

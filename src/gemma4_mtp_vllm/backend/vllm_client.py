@@ -58,6 +58,9 @@ class VllmClient:
     async def completion(self, body: dict) -> dict:
         return await self._post_json("/v1/completions", body)
 
+    async def tokenize(self, body: dict) -> dict:
+        return await self._post_json("/tokenize", body)
+
     async def chat_completion_stream(self, body: dict) -> AsyncIterator[dict]:
         async for chunk in self._post_stream("/v1/chat/completions", body):
             yield chunk

@@ -150,6 +150,14 @@ def test_anthropic_messages_streaming():
     assert b"event: message_start" in body_bytes
     assert b"event: content_block_delta" in body_bytes
     assert b"event: message_stop" in body_bytes
+    metrics = client.get("/metrics", headers={"x-api-key": "secret"}).text
+    assert "gemma4_mtp_generation_tokens_total 1" in metrics
+    generation_seconds = next(
+        float(line.split()[-1])
+        for line in metrics.splitlines()
+        if line.startswith("gemma4_mtp_generation_seconds_total ")
+    )
+    assert generation_seconds > 0
 
 
 def test_anthropic_messages_queue_full_uses_anthropic_error_shape_without_forwarding():
@@ -248,8 +256,13 @@ def test_anthropic_rate_limit_uses_anthropic_error_shape():
     assert response.json()["error"]["type"] == "rate_limited"
 
 
-def test_anthropic_count_tokens_uses_word_count():
+def test_anthropic_count_tokens_uses_backend_tokenizer():
+    captured: dict = {}
+
     def handler(request):
+        if request.url.path == "/tokenize":
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"count": 17, "tokens": list(range(17))})
         return httpx.Response(200, json={"status": "ok"})
 
     client = _vllm(handler)
@@ -263,8 +276,32 @@ def test_anthropic_count_tokens_uses_word_count():
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["input_tokens"] >= 2
-    assert response.headers["x-gemma4-mtp-token-counting"] == "estimated_word_count"
+    assert body["input_tokens"] == 17
+    assert response.headers["x-gemma4-mtp-token-counting"] == "backend_tokenizer"
+    assert captured["body"] == {
+        "model": "gemma-4-31b-mtp",
+        "messages": [{"role": "user", "content": "hello world"}],
+    }
+
+
+def test_anthropic_count_tokens_backend_error_is_503():
+    def handler(request):
+        if request.url.path == "/tokenize":
+            return httpx.Response(503, json={"error": {"message": "down"}})
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = _vllm(handler)
+    response = client.post(
+        "/v1/messages/count_tokens",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "claude-gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hello world"}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "backend_unavailable"
 
 
 def test_anthropic_count_tokens_rejects_unknown_model():

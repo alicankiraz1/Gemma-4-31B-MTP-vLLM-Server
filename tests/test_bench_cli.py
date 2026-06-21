@@ -16,7 +16,7 @@ def _make_handler(*, tps_mtp: float, tps_baseline: float):
     def handler(request: httpx.Request) -> httpx.Response:
         # Headers carry which URL was hit; we route by host.
         host = request.url.host
-        tps = tps_mtp if host == "mtp" else tps_baseline
+        tps = tps_mtp if host and host.startswith("mtp") else tps_baseline
         return httpx.Response(
             200,
             json={
@@ -92,8 +92,6 @@ def test_bench_matrix_iterates_prompts_and_n(monkeypatch, tmp_path):
             "bench-matrix",
             "--profile",
             "safe80",
-            "--mtp-url",
-            "http://mtp:8000",
             "--baseline-url",
             "http://baseline:8000",
             "--prompt",
@@ -104,6 +102,10 @@ def test_bench_matrix_iterates_prompts_and_n(monkeypatch, tmp_path):
             "2",
             "--num-speculative-tokens",
             "4",
+            "--depth-mtp-url",
+            "2=http://mtp2:8000",
+            "--depth-mtp-url",
+            "4=http://mtp4:8000",
             "--runs",
             "1",
             "--warmup-runs",
@@ -117,3 +119,33 @@ def test_bench_matrix_iterates_prompts_and_n(monkeypatch, tmp_path):
     assert len(payload) == 4
     keys = {(entry["prompt"], entry["num_speculative_tokens"]) for entry in payload}
     assert keys == {("alpha", 2), ("alpha", 4), ("beta", 2), ("beta", 4)}
+
+
+def test_bench_matrix_rejects_fake_multi_depth_sweep(monkeypatch):
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(_make_handler(tps_mtp=20.0, tps_baseline=10.0)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "bench-matrix",
+            "--profile",
+            "safe80",
+            "--mtp-url",
+            "http://mtp:8000",
+            "--baseline-url",
+            "http://baseline:8000",
+            "--prompt",
+            "alpha",
+            "--num-speculative-tokens",
+            "2",
+            "--num-speculative-tokens",
+            "4",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "single --mtp-url cannot change live vLLM speculative depth" in result.stderr

@@ -7,6 +7,12 @@ import httpx
 from gemma4_mtp_vllm import REQUIRED_VLLM_MIN_VERSION, __version__
 from gemma4_mtp_vllm.backend.vllm_client import VllmClient, VllmHttpError
 from gemma4_mtp_vllm.profiles import ModelProfile
+from gemma4_mtp_vllm.runtime_config import (
+    config_matches,
+    desired_config,
+    mtp_observed_from_metrics,
+    observed_config_from_models,
+)
 from gemma4_mtp_vllm.versioning import version_at_least
 
 
@@ -40,6 +46,14 @@ async def _build_report(
 ) -> dict[str, Any]:
     vllm_status: dict[str, Any] = {"status": "unreachable", "version": None}
     target_served = False
+    desired = desired_config(profile)
+    observed: dict[str, Any] = {
+        "models": [],
+        "served_model_name": None,
+        "target_served": False,
+        "max_model_len": None,
+        "mtp_observed": False,
+    }
     try:
         await client.health()
         vllm_status["status"] = "ok"
@@ -54,15 +68,28 @@ async def _build_report(
             vllm_status["version"] = None
         try:
             models_body = await client.list_models()
-            ids = {entry.get("id") for entry in models_body.get("data") or []}
-            target_served = profile.target in ids or served_model_name in ids
+            observed.update(
+                observed_config_from_models(
+                    models_body,
+                    target_model=profile.target,
+                    served_model_name=served_model_name,
+                )
+            )
+            target_served = bool(observed["target_served"])
         except (VllmHttpError, httpx.HTTPError):
             target_served = False
+        try:
+            observed["mtp_observed"] = mtp_observed_from_metrics(
+                await client.metrics_text()
+            )
+        except (VllmHttpError, httpx.HTTPError):
+            observed["mtp_observed"] = False
 
     version_ok = version_at_least(
         vllm_status.get("version"),
         REQUIRED_VLLM_MIN_VERSION,
     )
+    matches = config_matches(desired, observed)
     ok = vllm_status.get("status") == "ok" and version_ok and target_served
     return {
         "ok": ok,
@@ -79,4 +106,8 @@ async def _build_report(
         "vllm": vllm_status,
         "version_ok": version_ok,
         "target_served": target_served,
+        "desired_config": desired,
+        "observed_config": observed,
+        "config_matches": matches,
+        "mtp_observed": observed.get("mtp_observed", False),
     }

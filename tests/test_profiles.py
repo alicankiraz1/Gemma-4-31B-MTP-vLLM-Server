@@ -31,7 +31,12 @@ def test_load_profiles_returns_known_defaults():
 
     assert isinstance(profiles, ProfileSet)
     assert profiles.default == "safe80"
-    assert set(profiles.items.keys()) == {"safe80", "tp2"}
+    assert set(profiles.items.keys()) == {
+        "safe80",
+        "tp2",
+        "tp2_2x32_smoke",
+        "tp2_2x32_fp8_gpuonly",
+    }
 
     safe80 = profiles.items["safe80"]
     assert isinstance(safe80, ModelProfile)
@@ -45,6 +50,23 @@ def test_load_profiles_returns_known_defaults():
     assert safe80.top_p == pytest.approx(1.0)
     assert safe80.top_k == 0
     assert safe80.requires_vram_gb == 80
+    assert safe80.cpu_offload_gb == pytest.approx(0.0)
+    assert safe80.validation_level == "unverified"
+    assert safe80.max_output_tokens == 4096
+
+    smoke = profiles.items["tp2_2x32_smoke"]
+    assert smoke.tensor_parallel_size == 2
+    assert smoke.max_model_len == 2048
+    assert smoke.cpu_offload_gb == pytest.approx(8.0)
+    assert smoke.max_num_seqs == 1
+    assert smoke.max_num_batched_tokens == 4096
+    assert smoke.enforce_eager is True
+    assert smoke.validation_level == "smoke"
+    assert smoke.max_output_tokens == 1024
+
+    gpu_only = profiles.items["tp2_2x32_fp8_gpuonly"]
+    assert gpu_only.cpu_offload_gb == pytest.approx(0.0)
+    assert gpu_only.quantization == "fp8"
 
 
 def test_resolve_profile_via_alias():

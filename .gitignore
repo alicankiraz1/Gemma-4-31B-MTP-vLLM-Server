@@ -9,8 +9,11 @@ dist/
 build/
 *.egg-info/
 bench-results/
+artifacts/
+logs/
 .worktrees/
 .env
 .env.*
 *.env
+*.env*
 *.log

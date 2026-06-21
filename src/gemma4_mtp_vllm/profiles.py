@@ -26,6 +26,15 @@ class ModelProfile:
     top_p: float
     top_k: int
     requires_vram_gb: int
+    cpu_offload_gb: float = 0.0
+    max_num_seqs: int | None = None
+    max_num_batched_tokens: int | None = None
+    enforce_eager: bool = False
+    language_model_only: bool = False
+    validation_level: str = "unverified"
+    max_output_tokens: int = 4096
+    quantization: str | None = None
+    kv_cache_dtype: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,7 +106,7 @@ def _profile_fields(config: Any) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("profile entries must be mappings")
 
-    fields = {
+    required_fields = {
         "target": str,
         "drafter": str,
         "num_speculative_tokens": int,
@@ -109,15 +118,40 @@ def _profile_fields(config: Any) -> dict[str, Any]:
         "top_k": int,
         "requires_vram_gb": int,
     }
+    optional_fields: dict[str, tuple[type | tuple[type, ...], Any]] = {
+        "cpu_offload_gb": ((int, float), 0.0),
+        "max_num_seqs": (int, None),
+        "max_num_batched_tokens": (int, None),
+        "enforce_eager": (bool, False),
+        "language_model_only": (bool, False),
+        "validation_level": (str, "unverified"),
+        "max_output_tokens": (int, 4096),
+        "quantization": (str, None),
+        "kv_cache_dtype": (str, None),
+    }
 
     values: dict[str, Any] = {}
-    for key, expected_type in fields.items():
+    for key, expected_type in required_fields.items():
         value = config.get(key)
         if isinstance(value, bool) and _expects_int(expected_type):
             raise ValueError(f"profile field {key} has invalid type")
         if not isinstance(value, expected_type):
             raise ValueError(f"profile field {key} has invalid type")
         if key in {"gpu_memory_utilization", "temperature", "top_p"}:
+            values[key] = float(value)
+        else:
+            values[key] = value
+
+    for key, (expected_type, default) in optional_fields.items():
+        value = config.get(key, default)
+        if value is None:
+            values[key] = None
+            continue
+        if isinstance(value, bool) and _expects_int(expected_type):
+            raise ValueError(f"profile field {key} has invalid type")
+        if not isinstance(value, expected_type):
+            raise ValueError(f"profile field {key} has invalid type")
+        if key == "cpu_offload_gb":
             values[key] = float(value)
         else:
             values[key] = value
@@ -138,6 +172,23 @@ def _profile_fields(config: Any) -> dict[str, Any]:
         raise ValueError("top_k must be non-negative")
     if values["requires_vram_gb"] <= 0:
         raise ValueError("requires_vram_gb must be positive")
+    if values["cpu_offload_gb"] < 0:
+        raise ValueError("cpu_offload_gb must be non-negative")
+    if values["max_num_seqs"] is not None and values["max_num_seqs"] <= 0:
+        raise ValueError("max_num_seqs must be positive")
+    if (
+        values["max_num_batched_tokens"] is not None
+        and values["max_num_batched_tokens"] <= 0
+    ):
+        raise ValueError("max_num_batched_tokens must be positive")
+    if values["max_output_tokens"] <= 0:
+        raise ValueError("max_output_tokens must be positive")
+    if values["validation_level"] not in {"unverified", "smoke", "validated"}:
+        raise ValueError("validation_level must be unverified, smoke, or validated")
+    for key in ("quantization", "kv_cache_dtype"):
+        value = values[key]
+        if value is not None and not value.strip():
+            raise ValueError(f"{key} must be non-empty when set")
 
     return values
 

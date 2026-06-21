@@ -8,7 +8,7 @@ if [[ "${1:-}" == "--allow-dirty" ]]; then
 fi
 
 if [[ "$allow_dirty" != "1" ]]; then
-    if ! git diff --quiet || ! git diff --cached --quiet; then
+    if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
         echo "worktree is dirty; pass --allow-dirty for a non-release smoke" >&2
         exit 1
     fi

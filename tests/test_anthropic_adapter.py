@@ -40,6 +40,28 @@ def test_anthropic_request_translates_system_and_messages():
     }
 
 
+def test_anthropic_request_strips_assistant_thoughts_from_history():
+    payload = {
+        "model": "claude-gemma-4-31b-mtp",
+        "messages": [
+            {"role": "user", "content": "literal <thought>keep</thought>"},
+            {
+                "role": "assistant",
+                "content": "<thought>private chain</thought>\nVisible answer",
+            },
+        ],
+    }
+    openai_body = anthropic_request_to_openai(
+        payload,
+        openai_model="google/gemma-4-31B-it",
+    )
+
+    assert openai_body["messages"] == [
+        {"role": "user", "content": "literal <thought>keep</thought>"},
+        {"role": "assistant", "content": "Visible answer"},
+    ]
+
+
 def test_openai_response_to_anthropic_envelope():
     openai_payload = {
         "id": "chatcmpl-abc",
@@ -64,6 +86,26 @@ def test_openai_response_to_anthropic_envelope():
     assert body["stop_sequence"] is None
     assert body["usage"] == {"input_tokens": 4, "output_tokens": 1}
     assert body["id"].startswith("msg_")
+
+
+def test_openai_response_to_anthropic_strips_thought_tags():
+    body = openai_response_to_anthropic(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "<think>scratchpad</think>\nFinal answer",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        },
+        anthropic_model="claude-gemma-4-31b-mtp",
+        message_id_prefix="msg",
+    )
+
+    assert body["content"] == [{"type": "text", "text": "Final answer"}]
 
 
 def test_openai_response_max_tokens_maps_to_anthropic_stop_reason():

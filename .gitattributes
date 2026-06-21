@@ -1,0 +1,5 @@
+docs/superpowers/plans/** export-ignore
+internal/superpowers/** export-ignore
+.env* export-ignore
+*.env export-ignore
+*.env* export-ignore

@@ -108,7 +108,8 @@ flowchart LR
 
 ## Profiles
 
-The default `safe80` profile targets a single 80 GB-class GPU:
+The default `safe80` profile targets a single 80 GB-class GPU and is kept as
+an unverified high-memory profile:
 
 - Target: `google/gemma-4-31B-it`
 - Drafter: `google/gemma-4-31B-it-assistant`
@@ -116,15 +117,30 @@ The default `safe80` profile targets a single 80 GB-class GPU:
 - `tensor_parallel_size`: `1`
 - `gpu_memory_utilization`: `0.90`
 - `max_model_len`: `32768`
+- `validation_level`: `unverified`
 
-A `tp2` profile is available for two 40+ GB GPUs (`tensor_parallel_size: 2`).
-The live validation above used the same served alias with tensor parallelism
-across two RTX 5090 GPUs.
+The `tp2` profile is the unverified 2x40GB+ 32K-context target. It is not the
+Homelander 2x32GB smoke configuration.
+
+Use `tp2_2x32_smoke` to reproduce the constrained 2x RTX 5090 smoke backend:
+
+- `tensor_parallel_size`: `2`
+- `gpu_memory_utilization`: `0.95`
+- `max_model_len`: `2048`
+- `cpu_offload_gb`: `8`
+- `max_num_seqs`: `1`
+- `max_num_batched_tokens`: `4096`
+- `enforce_eager`: `true`
+- `max_output_tokens`: `1024`
+- `validation_level`: `smoke`
+
+Use `tp2_2x32_fp8_gpuonly` for the all-GPU FP8 experiment on the same host.
+It sets `cpu_offload_gb: 0` and `quantization: fp8`.
 
 ## vLLM Requirement
 
-The gateway requires `vllm >= 0.21.0,<0.22.0` for Gemma 4 MTP. vLLM 0.21.0
-ships official Gemma 4 MTP speculative decoding support via PR #41745.
+The gateway pins the GPU extra to `vllm == 0.21.0` for Gemma 4 MTP. vLLM
+0.21.0 ships official Gemma 4 MTP speculative decoding support via PR #41745.
 Older vLLM releases can fail during initialization or treat the Gemma 4
 assistant checkpoint incorrectly. This matters because older releases can
 mishandle the assistant checkpoint.
@@ -133,8 +149,12 @@ vLLM is an **optional extra** because it pulls heavy CUDA / ROCm wheels.
 Install it separately on the GPU host with:
 
 ```bash
-pip install "gemma4-mtp-vllm[vllm]"
+pip install -c constraints/vllm-0.21.0-cu130.txt -e ".[dev,vllm]"
 ```
+
+The constraint file also pins the FastAPI/instrumentator stack used by vLLM's
+HTTP server so a fresh virtual environment does not depend on mutable
+`site-packages` patches.
 
 The gateway process itself does not import `vllm`; it only talks to a
 running `vllm serve` over HTTP.
@@ -147,8 +167,8 @@ running `vllm serve` over HTTP.
 - NVIDIA CUDA driver `12.x` (CUDA 12.9 wheels available) or AMD ROCm
   `7.2.1+`. The gateway itself does not require a GPU, but `vllm serve`
   does.
-- Enough VRAM for the chosen profile (`safe80` needs 80 GB, `tp2` needs
-  2× 40+ GB).
+- Enough VRAM for the chosen profile (`safe80` needs 80 GB, unverified `tp2`
+  targets 2× 40+ GB, `tp2_2x32_smoke` targets 2× 32 GB with CPU offload).
 
 ### 1. Clone the repository
 
@@ -176,11 +196,12 @@ python -m pip install -e ".[dev]"
 For a GPU host that will also run `vllm serve`:
 
 ```bash
-python -m pip install -e ".[dev,vllm]"
+python -m pip install -c constraints/vllm-0.21.0-cu130.txt -e ".[dev,vllm]"
 ```
 
-The `[vllm]` extra installs `vllm >= 0.21.0,<0.22.0`. On NVIDIA hosts that
-need the latest pre-release CUDA wheels:
+The `[vllm]` extra pins `vllm == 0.21.0` plus the compatible FastAPI and
+instrumentator versions. On NVIDIA hosts that need the latest pre-release CUDA
+wheels, test them in a separate environment before replacing the pinned stack:
 
 ```bash
 uv pip install -U vllm --pre \
@@ -201,6 +222,17 @@ profile, including `--speculative-config` with the Gemma 4 MTP drafter. Use
 
 ```bash
 vllm-mtp launch --profile safe80 --print-only
+```
+
+Non-`--print-only` launches write a runtime manifest before replacing the
+process with `vllm serve`. The default path is
+`logs/vllm-launch-manifest.json`; it includes the exact argv, PID, git SHA,
+package versions, selected profile, served model name, and timestamp.
+
+For the constrained 2x RTX 5090 smoke profile:
+
+```bash
+vllm-mtp launch --profile tp2_2x32_smoke --host 127.0.0.1 --port 8012 --print-only
 ```
 
 For raw vLLM exposure, keep `--host 127.0.0.1`. Passing a non-loopback host to
@@ -227,19 +259,21 @@ Verify the vLLM process is reachable, new enough for Gemma 4 MTP, and serving
 the configured target model:
 
 ```bash
-vllm-mtp doctor --profile safe80 --vllm-base-url http://127.0.0.1:8000
+vllm-mtp doctor --profile tp2_2x32_smoke --vllm-base-url http://127.0.0.1:8012
 ```
 
 Expected output shape (single-line JSON):
 
 ```json
-{"ok": true, "profile": "safe80", "target_model": "google/gemma-4-31B-it", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 1, "gateway_version": "0.1.0", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true}
+{"ok": true, "profile": "tp2_2x32_smoke", "target_model": "google/gemma-4-31B-it", "served_model_name": "gemma-4-31b-mtp", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 2, "gateway_version": "0.2.0a1", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true, "desired_config": {"max_model_len": 2048}, "observed_config": {"max_model_len": 2048, "target_served": true}, "config_matches": true, "mtp_observed": true}
 ```
 
 `ok: false` indicates vLLM is unreachable, older than the required version, or
 the target model is not listed in vLLM's `/v1/models`. Real vLLM reports the
 served target model there; the drafter is reported as configured by this
-gateway and `drafter_loaded` remains `unknown`.
+gateway and `drafter_loaded` remains `unknown`. `config_matches` and
+`mtp_observed` are separate runtime truth fields; connectivity alone does not
+prove the backend was launched with the selected profile or MTP path.
 
 ## Benchmarks
 
@@ -274,17 +308,19 @@ vllm-mtp bench \
 ```
 
 For a matrix sweep over multiple prompts and `num_speculative_tokens`
-values:
+values, launch one MTP-enabled vLLM endpoint per speculative depth. A single
+live vLLM endpoint cannot change `num_speculative_tokens` per request.
 
 ```bash
 vllm-mtp bench-matrix \
     --profile safe80 \
-    --mtp-url http://127.0.0.1:8001 \
     --baseline-url http://127.0.0.1:8002 \
     --prompt "Short technical answer." \
     --prompt "Long multi-step reasoning." \
     --num-speculative-tokens 2 \
     --num-speculative-tokens 4 \
+    --depth-mtp-url 2=http://127.0.0.1:8001 \
+    --depth-mtp-url 4=http://127.0.0.1:8003 \
     --runs 3 \
     --warmup-runs 1 \
     --json-output bench-results/safe80-matrix.json
@@ -336,7 +372,7 @@ curl -sS http://127.0.0.1:8080/v1/messages \
 
 ## Alpha Policy
 
-The gateway is intentionally narrow in v0.1. The following request fields
+The gateway remains intentionally narrow in the 0.2 alpha. The following request fields
 fail fast with `400 unsupported_feature` instead of being silently ignored
 or forwarded to vLLM:
 
@@ -351,12 +387,14 @@ No-op client defaults are accepted for compatibility:
 Anthropic `tools: []`, `tool_choice: {"type": "none"}`,
 `thinking: {"type": "disabled"}`, `stop_sequences: []`.
 
-`/v1/messages/count_tokens` returns a word-count estimate with the
-`X-Gemma4-MTP-Token-Counting: estimated_word_count` header. Tokenizer-exact
-counting is planned but not in v0.1.
+`/v1/messages/count_tokens` calls the upstream vLLM `/tokenize` endpoint with
+the translated chat messages and returns the `backend_tokenizer` count in the
+`X-Gemma4-MTP-Token-Counting` header.
 
 Streaming SSE works through the gateway; vLLM streams natively. Anthropic
-streaming buffers the upstream chunks before translation in v0.1.
+streaming buffers the upstream chunks before translation in the 0.2 alpha. Streaming
+requests update the same generation token and generation second counters as
+non-streaming requests.
 
 ## Guardrails
 
@@ -402,8 +440,10 @@ macOS metadata entries:
 scripts/verify_source_archive.sh Gemma-4-31B-MTP-vllm-src.zip
 ```
 
-The verifier rejects `.git`, `.venv`, `dist`, `__MACOSX`, `__pycache__`, and
-build/cache entries.
+The verifier rejects `.git`, `.venv`, `.worktrees`, `dist`, build/cache entries
+(`build`, `__pycache__`, `.pytest_cache`), `artifacts`, `logs`, env files,
+internal/superpowers plan files, macOS metadata (`__MACOSX`, `.DS_Store`),
+local absolute paths, and secret-like content.
 
 ### Wheel Freshness
 
@@ -429,14 +469,14 @@ python -m build --wheel
 
 ### Local Verification (2026-05-17)
 
-- `python -m pytest -q` -> `159 passed`
+- `python -m pytest -q` -> `191 passed`
 - `python -m pip check` → `No broken requirements found.`
 - `python -m compileall -q src` → no errors
-- `python -m build --wheel` → built `gemma4_mtp_vllm-0.1.0-py3-none-any.whl`
+- `python -m build --wheel` → built `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
 - `scripts/verify_wheel_freshness.sh` → `wheel smoke ok`
 - `scripts/make_source_archive.sh` + `scripts/verify_source_archive.sh` → archive clean
 
-159 tests cover profiles, server limits, bind policy, errors, runtime state,
+191 tests cover profiles, server limits, bind policy, errors, runtime state,
 middleware, policy validation, request validation, vLLM HTTP client, Anthropic
 adapter, server app foundation, health, metrics, OpenAI endpoints, Anthropic
 endpoints, doctor, benchmarking, launch helper, CLI, bench CLI, versioning, and

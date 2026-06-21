@@ -14,6 +14,7 @@ def test_default_limits_have_safe_values():
     assert limits.rate_limit_rpm == 30
     assert limits.metrics_enabled is True
     assert limits.cors_origins == ()
+    assert limits.generation_timeout_seconds == pytest.approx(900.0)
 
 
 def test_public_dict_exposes_runtime_fields():
@@ -25,6 +26,7 @@ def test_public_dict_exposes_runtime_fields():
         "max_output_tokens": 512,
         "max_queue_size": 4,
         "rate_limit_rpm": 30,
+        "generation_timeout_seconds": 900.0,
     }
 
 
@@ -35,6 +37,7 @@ def test_public_dict_exposes_runtime_fields():
         {"max_output_tokens": 0},
         {"max_queue_size": 0},
         {"rate_limit_rpm": -1},
+        {"generation_timeout_seconds": 0},
     ],
 )
 def test_invalid_limits_rejected(kwargs):

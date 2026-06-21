@@ -149,3 +149,36 @@ async def test_doctor_marks_not_ok_when_vllm_unreachable():
     )
     assert report["ok"] is False
     assert report["vllm"]["status"] == "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_doctor_reports_observed_config_and_mtp_metric_separately():
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={
+                "data": [
+                    {"id": "gemma-4-31b-mtp", "max_model_len": 2048},
+                ],
+            })
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text="vllm:spec_decode_draft_acceptance_rate 0.58\n",
+            )
+        return httpx.Response(404)
+
+    report = await build_report(
+        profile=resolve_profile("tp2_2x32_smoke", load_profiles()),
+        vllm_base_url="http://vllm.local:8000",
+        transport=httpx.MockTransport(handler),
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    assert report["ok"] is True
+    assert report["observed_config"]["max_model_len"] == 2048
+    assert report["config_matches"] is True
+    assert report["mtp_observed"] is True
