@@ -38,8 +38,13 @@ cat <<'PY' > "$work/smoke.py"
 import httpx
 from fastapi.testclient import TestClient
 
+import gemma4_mtp_vllm
 from gemma4_mtp_vllm.server.app import create_app
 
+if gemma4_mtp_vllm.__version__ != "0.2.0a1":
+    raise SystemExit(
+        f"installed wheel version mismatch: {gemma4_mtp_vllm.__version__}"
+    )
 
 def handler(request):
     if request.url.path in {"/health", "/v1/models", "/version"}:
@@ -55,11 +60,14 @@ app = create_app(
 client = TestClient(app)
 
 livez = client.get("/livez")
-assert livez.status_code == 200, livez.text
+if livez.status_code != 200:
+    raise SystemExit(f"/livez smoke failed: {livez.status_code} {livez.text}")
 
 health = client.get("/health", headers={"x-api-key": "local-dev-key"})
-assert health.status_code == 200, health.text
-assert "Gemma 4 31B MTP" in health.text or "gemma-4-31B-it" in health.text
+if health.status_code != 200:
+    raise SystemExit(f"/health smoke failed: {health.status_code} {health.text}")
+if "Gemma 4 31B MTP" not in health.text and "gemma-4-31B-it" not in health.text:
+    raise SystemExit("/health smoke missing Gemma model evidence")
 
 print("wheel smoke ok")
 PY

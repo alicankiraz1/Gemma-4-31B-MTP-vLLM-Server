@@ -29,6 +29,15 @@ def test_verify_wheel_freshness_exists_and_executable():
 def test_wheel_freshness_script_contains_required_smoke_steps():
     script = Path("scripts/verify_wheel_freshness.sh").read_text(encoding="utf-8")
     assert "create_app" in script
+    assert "__version__" in script
+    assert '"0.2.0a1"' in script
+    assert "raise SystemExit" in script
+    assert "installed wheel version mismatch" in script
+    assert "/livez smoke failed" in script
+    assert "/health smoke failed" in script
+    assert "/health smoke missing Gemma model evidence" in script
+    assert "assert livez" not in script
+    assert "assert health" not in script
     assert "/livez" in script
     assert "x-api-key" in script
     assert "local-dev-key" in script
@@ -166,6 +175,74 @@ def test_readme_warns_against_manual_source_archives():
     ):
         assert path in readme
     assert "build/cache entries" in readme
+
+
+def test_readme_scopes_public_benchmark_claims_to_immutable_result():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "Benchmark ID: `homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`" in readme
+    assert "not a universal Gemma 4 MTP performance claim" in readme
+    assert "2x NVIDIA GeForce RTX 5090, 32 GB each" in readme
+    assert "`profile`: `tp2_2x32_fp8_gpuonly`" in readme
+    assert "`cpu_offload_gb`: `0`" in readme
+    assert "`quantization`: `fp8`" in readme
+    assert "`max_model_len`: `2048`" in readme
+    assert "`max_num_seqs`: `1`" in readme
+    assert "`enforce_eager`: `true`" in readme
+    assert "`num_speculative_tokens`: `4`" in readme
+    assert "direct vLLM endpoint A/B" in readme
+    assert "gateway-overhead test" in readme
+    assert "MTP vs no-MTP speedup test" in readme
+    assert "BF16 CPU-offload smoke" in readme
+    assert "FP8 GPU-only result" in readme
+    assert "`e2e_output_tokens_per_second`" in readme
+    assert "`--artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`" in readme
+    for value in ("3.46x", "3.89x", "3.99x", "47.79", "54.02", "55.03"):
+        assert value in readme
+
+
+def test_readme_removes_stale_unscoped_benchmark_numbers():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert not Path("assets/gemma4-mtp-benchmark-card.png").exists()
+    for stale in (
+        "2.12x_average",
+        "132.56_tok",
+        "62.74",
+        "136.27",
+        "62.96",
+        "130.71",
+        "62.70",
+        "132.56",
+        "2.17x",
+        "2.08x",
+        "2.11x",
+    ):
+        assert stale not in readme
+
+
+def test_benchmark_record_documents_reproduction_without_local_paths():
+    record = Path(
+        "docs/benchmarks/"
+        "homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md"
+    ).read_text(encoding="utf-8")
+    assert "local hardware/configuration result" in record
+    assert "direct vLLM endpoint A/B" in record
+    assert "`tp2_2x32_fp8_gpuonly`" in record
+    assert "CPU offload: 0 GB" in record
+    assert "Quantization: fp8" in record
+    assert "Speculative depth: 4" in record
+    assert "`e2e_output_tokens_per_second`" in record
+    assert "vllm-mtp bench" in record
+    assert "--artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0" in record
+    for value in ("3.46x", "3.89x", "3.99x", "47.79", "54.02", "55.03"):
+        assert value in record
+    for forbidden in (
+        "/" + "Users" + "/",
+        "/" + "home" + "/",
+        "Ali" + ".63",
+        "192.168" + ".",
+        "10.0.42" + ".",
+    ):
+        assert forbidden not in record
 
 
 def test_readme_and_cli_do_not_describe_current_alpha_as_v0_1():

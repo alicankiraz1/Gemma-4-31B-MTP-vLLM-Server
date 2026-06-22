@@ -1,9 +1,5 @@
 # Gemma 4 31B MTP vLLM Server
 
-<p align="center">
-  <img src="assets/gemma4-mtp-benchmark-card.png" alt="Gemma 4 31B MTP vLLM benchmark snapshot" width="100%">
-</p>
-
 A production-minded FastAPI sidecar for serving Gemma 4 31B on vLLM with
 Gemma 4 Multi-Token Prediction (MTP) speculative decoding. It keeps the raw
 `vllm serve` process private and adds OpenAI-compatible and Anthropic-compatible
@@ -16,27 +12,46 @@ been validated on a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`.
 
 ## Performance Snapshot
 
-<div align="center">
+Benchmark ID: `homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`
 
-![MTP speedup](https://img.shields.io/badge/MTP_speedup-2.12x_average-00c2ff?style=for-the-badge)
-![1000 token throughput](https://img.shields.io/badge/1000_token_run-132.56_tok%2Fs-6ee7b7?style=for-the-badge)
-![Hardware](https://img.shields.io/badge/hardware-2x_RTX_5090-8b5cf6?style=for-the-badge)
-![vLLM](https://img.shields.io/badge/vLLM-0.21.0-f97316?style=for-the-badge)
+This is a local direct vLLM endpoint A/B result and not a universal Gemma 4 MTP performance claim.
+It compares one MTP-enabled vLLM process against a separate no-MTP vLLM process
+on the same local host. It is not a gateway-overhead test.
 
-</div>
+Scope:
 
-| Scenario | Baseline Gemma 4 31B | Gemma 4 31B + MTP | Improvement |
+- Hardware: 2x NVIDIA GeForce RTX 5090, 32 GB each
+- `profile`: `tp2_2x32_fp8_gpuonly`
+- `target`: `google/gemma-4-31B-it`
+- `drafter`: `google/gemma-4-31B-it-assistant`
+- `vllm`: `0.21.0`
+- `torch`: `2.11.0+cu130`
+- `tensor_parallel_size`: `2`
+- `quantization`: `fp8`
+- `cpu_offload_gb`: `0`
+- `max_model_len`: `2048`
+- `max_num_seqs`: `1`
+- `max_num_batched_tokens`: `4096`
+- `enforce_eager`: `true`
+- `num_speculative_tokens`: `4`
+
+Metric: `e2e_output_tokens_per_second`, which includes HTTP streaming,
+queueing/prefill/TTFT, and decode time. Do not compare it to a raw engine-only
+`generation_tps` metric.
+
+| Output token target | No-MTP baseline | MTP enabled | Local speedup |
 | --- | ---: | ---: | ---: |
-| 250 completion tokens | 62.74 tok/s | 136.27 tok/s | 2.17x |
-| 500 completion tokens | 62.96 tok/s | 130.71 tok/s | 2.08x |
-| 1000 completion tokens | 62.70 tok/s | 132.56 tok/s | 2.11x |
+| 64 | 13.83 tok/s | 47.79 tok/s | 3.46x |
+| 256 | 13.88 tok/s | 54.02 tok/s | 3.89x |
+| 512 | 13.78 tok/s | 55.03 tok/s | 3.99x |
 
-| Validation Target | Result |
-| --- | --- |
-| Real hardware smoke | Passed on 2x RTX 5090 |
-| Gateway health | `ready`, `version_ok: true` |
-| OpenAI + Anthropic routes | Chat, stream, messages, count_tokens passed |
-| Backend errors after smoke | `gemma4_mtp_backend_errors 0` |
+The 1024-token MTP-only smoke was approximately 19.9 seconds, or about
+51.5 output tok/s. Treat it as a long-request MTP smoke result, not an MTP vs
+no-MTP speedup test unless a paired no-MTP baseline artefact is present.
+
+See
+[`docs/benchmarks/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md`](docs/benchmarks/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md)
+for the immutable benchmark record and reproduction commands.
 
 ## Verified Results
 
@@ -59,17 +74,18 @@ Smoke results:
 - `/v1/messages/count_tokens`: `200 OK`
 - `/metrics`: `gemma4_mtp_backend_errors 0`
 
+This is the BF16 CPU-offload smoke result for `tp2_2x32_smoke`
+(`cpu_offload_gb: 8`). It proves that the API surfaces and health checks work on
+the constrained 2x RTX 5090 host. It is separate from the FP8 GPU-only result
+above and should not be used as a throughput claim.
+
 ### MTP Throughput
 
-Measured directly against the vLLM OpenAI endpoint with
-`min_tokens=max_tokens`, `ignore_eos=true`, one warmup request, and the same
-prompt for both runs.
-
-| Completion target | MTP tok/s | Baseline tok/s | Speedup |
-| --- | ---: | ---: | ---: |
-| 250 tokens | 136.27 | 62.74 | 2.17x |
-| 500 tokens | 130.71 | 62.96 | 2.08x |
-| 1000 tokens | 132.56 | 62.70 | 2.11x |
+The current public throughput result is the FP8 GPU-only result identified by
+`homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`. It is a direct vLLM
+MTP vs no-MTP speedup test, not a gateway-overhead test. Older unscoped
+throughput numbers have been removed from the README; keep any future numbers
+behind an immutable benchmark ID and artefact bundle.
 
 The MTP service was restored after the benchmark and left healthy.
 
@@ -284,19 +300,28 @@ window, not proof that no concurrent traffic contributed to process counters.
 ## Benchmarks
 
 The bench harness compares one vLLM process running with MTP enabled
-against a second vLLM process running without `--speculative-config`. The
-user is responsible for launching both processes. Example:
+against a second vLLM process running without `--speculative-config`. This is
+the MTP vs no-MTP speedup test. A direct-vLLM vs gateway-overhead test is a
+different experiment: keep MTP/no-MTP fixed and compare direct vLLM requests to
+requests routed through the gateway. The user is responsible for launching both
+processes before running a speedup benchmark.
+
+Example FP8 GPU-only reproduction for
+`homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`:
+Use the immutable artefact flag
+`--artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0` when
+sharing generated benchmark evidence.
 
 Terminal 1 (MTP-enabled vLLM on 8001):
 
 ```bash
-vllm-mtp launch --profile safe80 --port 8001
+vllm-mtp launch --profile tp2_2x32_fp8_gpuonly --port 8001
 ```
 
 Terminal 2 (baseline vLLM without MTP on 8002):
 
 ```bash
-vllm-mtp launch --profile safe80 --port 8002 --no-mtp
+vllm-mtp launch --profile tp2_2x32_fp8_gpuonly --port 8002 --no-mtp
 ```
 
 Terminal 3 (paired bench):
@@ -304,14 +329,32 @@ Terminal 3 (paired bench):
 ```bash
 vllm-mtp bench \
     --prompt "Summarize the key trade-offs of running Gemma 4 locally." \
-    --profile safe80 \
-    --max-tokens 128 \
+    --profile tp2_2x32_fp8_gpuonly \
+    --output-token-target 256 \
     --mtp-url http://127.0.0.1:8001 \
     --baseline-url http://127.0.0.1:8002 \
-    --runs 3 \
-    --warmup-runs 1 \
+    --runs 10 \
+    --warmup-runs 2 \
     --artifact-root artifacts/benchmarks \
-    --json-output bench-results/safe80.json
+    --artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0 \
+    --json-output bench-results/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.json
+```
+
+To reproduce all published output-token targets in one matrix:
+
+```bash
+vllm-mtp bench-matrix \
+    --profile tp2_2x32_fp8_gpuonly \
+    --baseline-url http://127.0.0.1:8002 \
+    --mtp-url http://127.0.0.1:8001 \
+    --prompt "Summarize the key trade-offs of running Gemma 4 locally." \
+    --num-speculative-tokens 4 \
+    --output-token-target 64 \
+    --output-token-target 256 \
+    --output-token-target 512 \
+    --runs 10 \
+    --warmup-runs 2 \
+    --json-output bench-results/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0-matrix.json
 ```
 
 For a matrix sweep over multiple prompts and `num_speculative_tokens`
@@ -320,7 +363,7 @@ live vLLM endpoint cannot change `num_speculative_tokens` per request.
 
 ```bash
 vllm-mtp bench-matrix \
-    --profile safe80 \
+    --profile tp2_2x32_fp8_gpuonly \
     --baseline-url http://127.0.0.1:8002 \
     --prompt "Short technical answer." \
     --prompt "Long multi-step reasoning." \
@@ -328,9 +371,9 @@ vllm-mtp bench-matrix \
     --num-speculative-tokens 4 \
     --depth-mtp-url 2=http://127.0.0.1:8001 \
     --depth-mtp-url 4=http://127.0.0.1:8003 \
-    --runs 3 \
-    --warmup-runs 1 \
-    --json-output bench-results/safe80-matrix.json
+    --runs 10 \
+    --warmup-runs 2 \
+    --json-output bench-results/homelander-depth-sweep.json
 ```
 
 ### Upstream caveat
@@ -463,8 +506,9 @@ scripts/verify_wheel_freshness.sh
 ```
 
 The verifier removes stale wheels, builds a fresh one, installs it into a
-temporary virtual environment, and exercises `/livez`, `/health` (with
-api key), and basic endpoint shape using a fake vLLM transport.
+temporary virtual environment, asserts the installed package reports
+`0.2.0a1`, and exercises `/livez`, `/health` (with api key), and basic endpoint
+shape using a fake vLLM transport.
 
 ## Verification
 
