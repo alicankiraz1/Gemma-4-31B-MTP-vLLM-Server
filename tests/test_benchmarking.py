@@ -24,6 +24,9 @@ def test_speedup_returns_none_when_baseline_missing():
     assert speedup(0.0, 10.0) is None
     assert speedup(None, 10.0) is None
     assert speedup(10.0, None) is None
+    assert speedup(float("nan"), 10.0) is None
+    assert speedup(10.0, float("inf")) is None
+    assert speedup(1e-308, 1e308) is None
 
 
 @pytest.mark.parametrize(
@@ -45,6 +48,7 @@ def test_median_optional_returns_value():
     assert median_optional([1.0, 2.0, 3.0]) == pytest.approx(2.0)
     assert median_optional([]) is None
     assert median_optional([None]) is None
+    assert median_optional([float("nan"), float("inf")]) is None
 
 
 def test_benchmark_summary_to_json_roundtrip():
@@ -102,8 +106,15 @@ def test_metric_summary_reports_percentiles_and_bootstrap_ci():
     assert summary["median"] == pytest.approx(20.0)
     assert summary["p10"] == pytest.approx(12.0)
     assert summary["p90"] == pytest.approx(28.0)
+    assert summary["p95"] == pytest.approx(29.0)
     assert summary["bootstrap_ci_95"]["low"] <= summary["median"]
     assert summary["bootstrap_ci_95"]["high"] >= summary["median"]
+
+
+def test_metric_summary_ignores_nonfinite_values():
+    summary = metric_summary([10.0, float("nan"), float("inf")])
+
+    assert summary["median"] == 10.0
 
 
 def test_bootstrap_ci_returns_none_for_empty_values():

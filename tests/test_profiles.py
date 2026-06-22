@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import filecmp
 from pathlib import Path
 
@@ -36,6 +37,7 @@ def test_load_profiles_returns_known_defaults():
         "tp2",
         "tp2_2x32_smoke",
         "tp2_2x32_fp8_gpuonly",
+        "tp2_2x32_fp8_gpuonly_cuda_graph",
     }
 
     safe80 = profiles.items["safe80"]
@@ -67,6 +69,15 @@ def test_load_profiles_returns_known_defaults():
     gpu_only = profiles.items["tp2_2x32_fp8_gpuonly"]
     assert gpu_only.cpu_offload_gb == pytest.approx(0.0)
     assert gpu_only.quantization == "fp8"
+
+    cuda_graph = profiles.items["tp2_2x32_fp8_gpuonly_cuda_graph"]
+    gpu_only_values = asdict(gpu_only)
+    cuda_graph_values = asdict(cuda_graph)
+    assert gpu_only_values.pop("name") == "tp2_2x32_fp8_gpuonly"
+    assert cuda_graph_values.pop("name") == "tp2_2x32_fp8_gpuonly_cuda_graph"
+    assert gpu_only_values.pop("enforce_eager") is True
+    assert cuda_graph_values.pop("enforce_eager") is False
+    assert cuda_graph_values == gpu_only_values
 
 
 def test_resolve_profile_via_alias():

@@ -67,3 +67,22 @@ profiles:
     validation_level: smoke
     max_output_tokens: 1024
     quantization: fp8
+  tp2_2x32_fp8_gpuonly_cuda_graph:
+    target: google/gemma-4-31B-it
+    drafter: google/gemma-4-31B-it-assistant
+    num_speculative_tokens: 4
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.95
+    max_model_len: 2048
+    temperature: 0.0
+    top_p: 1.0
+    top_k: 0
+    requires_vram_gb: 32
+    cpu_offload_gb: 0
+    max_num_seqs: 1
+    max_num_batched_tokens: 4096
+    enforce_eager: false
+    language_model_only: false
+    validation_level: smoke
+    max_output_tokens: 1024
+    quantization: fp8

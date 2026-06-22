@@ -245,6 +245,65 @@ def test_benchmark_record_documents_reproduction_without_local_paths():
         assert forbidden not in record
 
 
+def test_p1_001_experiment_runbook_keeps_eager_ab_scoped():
+    plan = Path("docs/plans/p1-001-cuda-graph-eager-ab.md").read_text(
+        encoding="utf-8"
+    )
+    runbook = Path("docs/experiments/p1-001-cuda-graph-eager-ab.md").read_text(
+        encoding="utf-8"
+    )
+    combined = plan + runbook
+    assert "`tp2_2x32_fp8_gpuonly`" in combined
+    assert "`tp2_2x32_fp8_gpuonly_cuda_graph`" in combined
+    assert "`enforce_eager: true`" in combined
+    assert "`enforce_eager: false`" in combined
+    assert "differ only by `enforce_eager`" in combined
+    assert "Operator Stop Gate" in combined
+    assert "Stop here until the operator approves" in combined
+    assert "Do not run it" in combined
+    assert "beside the validated live backend" in combined
+    assert "Control Stop Gate" in combined
+    assert "Stop the control backend before starting the candidate" in combined
+    assert "Rollback Gate" in combined
+    assert "startup time" in combined
+    assert "peak GPU memory" in combined
+    assert "TTFT" in combined
+    assert "TPOT" in combined
+    assert "`e2e_output_tokens_per_second`" in combined
+    assert "vllm-mtp bench-single" in combined
+    assert "--json-output bench-results/p1-001/eager-true.json" in combined
+    assert "--json-output bench-results/p1-001/eager-false.json" in combined
+    assert "vllm-mtp bench-compare" in combined
+    assert "--control-json bench-results/p1-001/eager-true.json" in combined
+    assert "--candidate-json bench-results/p1-001/eager-false.json" in combined
+    assert "--control-startup-seconds" in combined
+    assert "--candidate-startup-seconds" in combined
+    assert "--control-peak-gpu-memory-mib" in combined
+    assert "--candidate-peak-gpu-memory-mib" in combined
+    assert "--soak-passed" in combined
+    assert "--soak-seconds 3600" in combined
+    assert "--soak-error-count 0" in combined
+    assert "--no-oom" in combined
+    assert "--json-output bench-results/p1-001/eager-ab-recommendation.json" in combined
+    assert "`change_default_profile: false`" in combined
+    assert "wrong profiles" in combined
+    assert "differ by more than `enforce_eager`" in combined
+    assert "missing 64/256/512/1024 output-token targets" in combined
+    assert "mismatched request bodies" in combined
+    assert "missing TTFT/TPOT evidence" in combined
+    assert "incomplete per-GPU memory samples" in combined
+    assert "non-zero soak errors" in combined
+    assert "token ids" in combined
+    assert "`parity_ready: true`" in combined
+    assert "`tokenization_status: unavailable`" in combined
+    assert "one-hour soak" in combined
+    assert "deterministic parity" in combined
+    assert runbook.index("Operator Stop Gate") < runbook.index("## Control Run")
+    assert runbook.index("Control Stop Gate") < runbook.index("## Candidate Run")
+    assert runbook.index("## Candidate Run") < runbook.index("Recommendation Compare")
+    assert runbook.index("Recommendation Compare") < runbook.index("Rollback Gate")
+
+
 def test_readme_and_cli_do_not_describe_current_alpha_as_v0_1():
     readme = Path("README.md").read_text(encoding="utf-8")
     cli = Path("src/gemma4_mtp_vllm/cli.py").read_text(encoding="utf-8")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import statistics
 import random
 from dataclasses import asdict, dataclass
@@ -54,9 +55,12 @@ class BenchmarkSummary:
 def speedup(no_draft_tps: float | None, mtp_tps: float | None) -> float | None:
     if no_draft_tps is None or mtp_tps is None:
         return None
+    if not math.isfinite(no_draft_tps) or not math.isfinite(mtp_tps):
+        return None
     if no_draft_tps <= 0:
         return None
-    return mtp_tps / no_draft_tps
+    ratio = mtp_tps / no_draft_tps
+    return ratio if math.isfinite(ratio) else None
 
 
 def deterministic_parity(
@@ -72,7 +76,11 @@ def deterministic_parity(
 
 
 def median_optional(values: list[float | None]) -> float | None:
-    cleaned = [v for v in values if isinstance(v, (int, float))]
+    cleaned = [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(value)
+    ]
     if not cleaned:
         return None
     return statistics.median(cleaned)
@@ -112,12 +120,17 @@ def metric_summary(
     bootstrap_samples: int = 1000,
     seed: int = 1,
 ) -> dict[str, Any]:
-    cleaned = [float(value) for value in values if isinstance(value, (int, float))]
+    cleaned = [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(value)
+    ]
     if not cleaned:
         return {
             "median": None,
             "p10": None,
             "p90": None,
+            "p95": None,
             "bootstrap_ci_95": {"low": None, "high": None},
         }
     ci = bootstrap_ci(cleaned, samples=bootstrap_samples, seed=seed)
@@ -125,6 +138,7 @@ def metric_summary(
         "median": statistics.median(cleaned),
         "p10": percentile(cleaned, 10),
         "p90": percentile(cleaned, 90),
+        "p95": percentile(cleaned, 95),
         "bootstrap_ci_95": (
             {"low": ci[0], "high": ci[1]}
             if ci is not None

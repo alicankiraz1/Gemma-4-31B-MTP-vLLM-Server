@@ -97,6 +97,22 @@ def test_build_args_include_gpu_only_quantization_profile():
     assert args[args.index("--quantization") + 1] == "fp8"
 
 
+def test_cuda_graph_experiment_profile_omits_enforce_eager():
+    eager_args = build_vllm_serve_args(
+        profile=resolve_profile("tp2_2x32_fp8_gpuonly", load_profiles())
+    )
+    cuda_graph_args = build_vllm_serve_args(
+        profile=resolve_profile(
+            "tp2_2x32_fp8_gpuonly_cuda_graph",
+            load_profiles(),
+        )
+    )
+
+    assert "--enforce-eager" in eager_args
+    assert "--enforce-eager" not in cuda_graph_args
+    assert cuda_graph_args == [arg for arg in eager_args if arg != "--enforce-eager"]
+
+
 def test_build_launch_manifest_includes_runtime_fingerprint():
     profile = _smoke_profile()
     args = build_vllm_serve_args(profile=profile, served_model_name="gemma-4-31b-mtp")
