@@ -27,7 +27,11 @@ def _client(api_key="secret"):
         if request.url.path == "/metrics":
             return httpx.Response(
                 200,
-                text="vllm:spec_decode_draft_acceptance_rate 0.57\n",
+                text=(
+                    "vllm:spec_decode_num_drafts_total 2\n"
+                    "vllm:spec_decode_num_draft_tokens_total 8\n"
+                    "vllm:spec_decode_num_accepted_tokens_total 5\n"
+                ),
             )
         return httpx.Response(404)
 
@@ -61,6 +65,8 @@ def test_health_returns_profile_and_vllm_info():
     assert body["config_matches"] is False
     assert body["target_served"] is True
     assert body["mtp_observed"] is True
+    assert body["mtp"]["state"] == "active"
+    assert body["mtp"]["drafted_tokens_total"] == 8.0
     assert body["runtime"]["total_requests"] == 0
     assert body["model_aliases"]
     assert body["tools_supported"] is False
@@ -136,6 +142,95 @@ def test_health_uses_profile_max_output_default_when_limits_not_overridden():
     assert body["config_verification"]["status"] == "partial"
     assert body["config_verification"]["fields"]["cpu_offload_gb"]["status"] == "verified"
     assert body["config_matches"] is False
+
+
+def test_health_reports_registered_but_idle_mtp_metrics():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    "vllm:spec_decode_num_drafts_total 0\n"
+                    "vllm:spec_decode_num_draft_tokens_total 0\n"
+                    "vllm:spec_decode_num_accepted_tokens_total 0\n"
+                ),
+            )
+        return httpx.Response(404)
+
+    app = create_app(
+        profile_name="tp2_2x32_smoke",
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["mtp"]["state"] == "registered_but_idle"
+    assert body["mtp_observed"] is False
+
+
+def test_health_reports_mtp_unavailable_when_metrics_endpoint_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "gemma-4-31b-mtp"}]})
+        if request.url.path == "/metrics":
+            return httpx.Response(404)
+        return httpx.Response(404)
+
+    app = create_app(
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["mtp"]["state"] == "unavailable"
+    assert body["mtp_observed"] is False
+
+
+def test_health_keeps_mtp_metrics_when_model_listing_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(503, json={"error": "loading"})
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    'vllm:spec_decode_num_drafts_total{model_name="gemma-4-31b-mtp"} 2\n'
+                    'vllm:spec_decode_num_draft_tokens_total{model_name="gemma-4-31b-mtp"} 8\n'
+                    'vllm:spec_decode_num_accepted_tokens_total{model_name="gemma-4-31b-mtp"} 6\n'
+                ),
+            )
+        return httpx.Response(404)
+
+    app = create_app(
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["target_served"] is False
+    assert body["mtp"]["state"] == "active"
+    assert body["mtp"]["drafted_tokens_total"] == 8.0
+    assert body["mtp_observed"] is True
 
 
 def test_health_redacts_private_model_alias():

@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from gemma4_mtp_vllm import REQUIRED_VLLM_MIN_VERSION
+from gemma4_mtp_vllm.mtp_metrics import parse_mtp_metrics
 from gemma4_mtp_vllm.profiles import ModelProfile
 from gemma4_mtp_vllm.versioning import version_at_least
 
@@ -149,10 +150,19 @@ def observed_config_from_version(version: str | None) -> dict[str, Any]:
     return {"vllm_version": version, "_sources": {"vllm_version": "vllm_version_api"}}
 
 
-def observed_config_from_metrics(metrics_text: str) -> dict[str, Any]:
+def observed_config_from_metrics(
+    metrics_text: str,
+    *,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    mtp = parse_mtp_metrics(metrics_text, model_name=model_name)
     return {
-        "mtp_observed": mtp_observed_from_metrics(metrics_text),
-        "_sources": {"mtp_observed": "vllm_metrics"},
+        "mtp": mtp,
+        "mtp_observed": mtp.get("state") == "active",
+        "_sources": {
+            "mtp": "vllm_metrics",
+            "mtp_observed": "vllm_metrics",
+        },
     }
 
 
@@ -395,7 +405,7 @@ def argv_fingerprint(argv: list[str]) -> str:
 
 
 def mtp_observed_from_metrics(metrics_text: str) -> bool:
-    return "spec_decode" in metrics_text or "speculative" in metrics_text.lower()
+    return parse_mtp_metrics(metrics_text).get("state") == "active"
 
 
 def _find_model_entry(

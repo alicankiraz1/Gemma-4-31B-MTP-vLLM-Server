@@ -28,6 +28,7 @@ from gemma4_mtp_vllm.launch import (
     resolve_vllm_executable,
     write_launch_manifest,
 )
+from gemma4_mtp_vllm.mtp_metrics import mtp_metric_delta, parse_mtp_metrics
 from gemma4_mtp_vllm.profiles import (
     ModelProfile,
     ProfileSet,
@@ -109,6 +110,16 @@ async def _measure(
     return text, float(tps) if tps else 0.0
 
 
+async def _fetch_mtp_metrics(base_url: str) -> dict:
+    try:
+        async with _http_client(base_url) as http:
+            response = await http.get("/metrics")
+            response.raise_for_status()
+            return parse_mtp_metrics(response.text)
+    except Exception:
+        return parse_mtp_metrics("")
+
+
 async def _single_bench(
     *,
     profile: ModelProfile,
@@ -133,7 +144,9 @@ async def _single_bench(
 
     observations: list[BenchmarkObservation] = []
     for idx in range(1, runs + 1):
+        mtp_metrics_before = await _fetch_mtp_metrics(mtp_url)
         mtp_text, mtp_tps = await _measure(mtp_url, body)
+        mtp_metrics_after = await _fetch_mtp_metrics(mtp_url)
         no_text, no_tps = await _measure(baseline_url, body)
         observations.append(
             BenchmarkObservation(
@@ -143,6 +156,12 @@ async def _single_bench(
                 speedup=speedup(no_tps, mtp_tps),
                 deterministic_parity=deterministic_parity(
                     no_text, mtp_text, temperature=0.0, top_p=1.0
+                ),
+                mtp_metrics_before=mtp_metrics_before,
+                mtp_metrics_after=mtp_metrics_after,
+                mtp_metrics_delta=mtp_metric_delta(
+                    mtp_metrics_before,
+                    mtp_metrics_after,
                 ),
             )
         )

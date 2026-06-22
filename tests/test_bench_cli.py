@@ -75,6 +75,60 @@ def test_bench_command_emits_summary(monkeypatch, tmp_path):
     assert body["profile"] == "safe80"
     assert len(body["observations"]) == 2
     assert body["median_speedup"] == 2.0
+    assert body["observations"][0]["mtp_metrics_before"]["state"] == "unavailable"
+    assert body["observations"][0]["mtp_metrics_delta"]["state"] == "unavailable"
+
+
+def test_bench_command_records_mtp_metric_deltas(monkeypatch, tmp_path):
+    metrics_values = iter([0, 8])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            drafted = next(metrics_values)
+            return httpx.Response(
+                200,
+                text=(
+                    "vllm:spec_decode_num_drafts_total 1\n"
+                    f"vllm:spec_decode_num_draft_tokens_total {drafted}\n"
+                    "vllm:spec_decode_num_accepted_tokens_total 5\n"
+                ),
+            )
+        return _make_handler(tps_mtp=20.0, tps_baseline=10.0)(request)
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+
+    out = tmp_path / "result.json"
+    result = runner.invoke(
+        app,
+        [
+            "bench",
+            "--prompt",
+            "hello",
+            "--profile",
+            "safe80",
+            "--mtp-url",
+            "http://mtp:8000",
+            "--baseline-url",
+            "http://baseline:8000",
+            "--runs",
+            "1",
+            "--warmup-runs",
+            "0",
+            "--json-output",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    observation = json.loads(out.read_text())["observations"][0]
+    assert observation["mtp_metrics_before"]["drafted_tokens_total"] == 0.0
+    assert observation["mtp_metrics_after"]["drafted_tokens_total"] == 8.0
+    assert observation["mtp_metrics_delta"]["state"] == "active"
+    assert observation["mtp_metrics_delta"]["drafted_tokens_delta"] == 8.0
 
 
 def test_bench_matrix_iterates_prompts_and_n(monkeypatch, tmp_path):

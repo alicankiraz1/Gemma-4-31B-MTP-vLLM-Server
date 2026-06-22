@@ -265,7 +265,7 @@ vllm-mtp doctor --profile tp2_2x32_smoke --vllm-base-url http://127.0.0.1:8012
 Expected output shape (single-line JSON):
 
 ```json
-{"ok": true, "profile": "tp2_2x32_smoke", "target_model": "google/gemma-4-31B-it", "served_model_name": "gemma-4-31b-mtp", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 2, "gateway_version": "0.2.0a1", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true, "desired_config": {"max_model_len": 2048}, "observed_config": {"max_model_len": 2048, "target_served": true}, "config_verification": {"status": "partial", "fields": {"max_model_len": {"status": "verified", "source": "vllm_models_api"}, "cpu_offload_gb": {"status": "unknown", "source": "unknown"}}}, "config_matches": false, "mtp_observed": true}
+{"ok": true, "profile": "tp2_2x32_smoke", "target_model": "google/gemma-4-31B-it", "served_model_name": "gemma-4-31b-mtp", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 2, "gateway_version": "0.2.0a1", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true, "desired_config": {"max_model_len": 2048}, "observed_config": {"max_model_len": 2048, "target_served": true}, "config_verification": {"status": "partial", "fields": {"max_model_len": {"status": "verified", "source": "vllm_models_api"}, "cpu_offload_gb": {"status": "unknown", "source": "unknown"}}}, "config_matches": false, "mtp": {"state": "active", "metrics_registered": true, "active_since_start": true, "drafted_tokens_total": 960.0, "accepted_tokens_total": 863.0, "acceptance_rate": 0.899}, "mtp_observed": true}
 ```
 
 `ok: false` indicates vLLM is unreachable, older than the required version, or
@@ -276,6 +276,10 @@ field-level `verified`, `mismatch`, `unknown`, or `not_applicable` statuses.
 `config_matches` is true only when all required runtime fields are verified;
 connectivity alone does not prove the backend was launched with the selected
 profile or MTP path.
+`mtp_observed` is derived from parsed vLLM speculative decoding counters, not
+from metric names alone. Benchmark artefacts include before/after metric
+snapshots and deltas; treat those deltas as endpoint-local evidence for the run
+window, not proof that no concurrent traffic contributed to process counters.
 
 ## Benchmarks
 
@@ -471,14 +475,14 @@ python -m build --wheel
 
 ### Local Verification (2026-05-17)
 
-- `python -m pytest -q` -> `218 passed`
+- `python -m pytest -q` -> `229 passed`
 - `python -m pip check` → `No broken requirements found.`
 - `python -m compileall -q src` → no errors
 - `python -m build --wheel` → built `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
 - `scripts/verify_wheel_freshness.sh` → `wheel smoke ok`
 - `scripts/make_source_archive.sh` + `scripts/verify_source_archive.sh` → archive clean
 
-218 tests cover profiles, server limits, bind policy, errors, runtime state,
+229 tests cover profiles, server limits, bind policy, errors, runtime state,
 middleware, policy validation, request validation, vLLM HTTP client, Anthropic
 adapter, server app foundation, health, metrics, OpenAI endpoints, Anthropic
 endpoints, doctor, benchmarking, launch helper, CLI, bench CLI, versioning, and

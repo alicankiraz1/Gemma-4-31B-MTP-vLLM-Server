@@ -109,10 +109,16 @@ async def _build_report(
         try:
             observed = merge_observed_config(
                 observed,
-                observed_config_from_metrics(await client.metrics_text()),
+                observed_config_from_metrics(
+                    await client.metrics_text(),
+                    model_name=served_model_name,
+                ),
             )
         except (VllmHttpError, httpx.HTTPError):
-            observed["mtp_observed"] = False
+            observed = merge_observed_config(
+                observed,
+                observed_config_from_metrics("", model_name=served_model_name),
+            )
 
     version_ok = version_at_least(
         vllm_status.get("version"),
@@ -141,5 +147,6 @@ async def _build_report(
         "observed_config": public_observed,
         "config_verification": verification,
         "config_matches": matches,
+        "mtp": public_observed.get("mtp"),
         "mtp_observed": public_observed.get("mtp_observed", False),
     }

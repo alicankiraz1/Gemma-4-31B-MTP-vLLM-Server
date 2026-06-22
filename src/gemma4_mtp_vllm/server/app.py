@@ -316,6 +316,7 @@ def create_app(
             "config_verification": verification,
             "config_matches": matches,
             "target_served": public_observed.get("target_served", False),
+            "mtp": public_observed.get("mtp"),
             "mtp_observed": public_observed.get("mtp_observed", False),
             "model_aliases": redact_public_value(aliases),
             "vllm": vllm_status,
@@ -789,23 +790,29 @@ async def _observed_backend_config(
     try:
         models_body = await vllm.list_models()
     except (VllmHttpError, httpx.HTTPError):
-        return observed
-
-    observed = merge_observed_config(
-        observed,
-        observed_config_from_models(
-            models_body,
-            target_model=profile.target,
-            served_model_name=served_model_name,
-        ),
-    )
+        pass
+    else:
+        observed = merge_observed_config(
+            observed,
+            observed_config_from_models(
+                models_body,
+                target_model=profile.target,
+                served_model_name=served_model_name,
+            ),
+        )
     try:
         observed = merge_observed_config(
             observed,
-            observed_config_from_metrics(await vllm.metrics_text()),
+            observed_config_from_metrics(
+                await vllm.metrics_text(),
+                model_name=served_model_name,
+            ),
         )
     except (VllmHttpError, httpx.HTTPError):
-        observed["mtp_observed"] = False
+        observed = merge_observed_config(
+            observed,
+            observed_config_from_metrics("", model_name=served_model_name),
+        )
     return observed
 
 

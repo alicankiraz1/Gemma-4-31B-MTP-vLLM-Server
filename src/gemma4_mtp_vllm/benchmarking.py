@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import asdict, dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,9 @@ class BenchmarkObservation:
     mtp_generation_tps: float | None
     speedup: float | None
     deterministic_parity: bool | None
+    mtp_metrics_before: dict[str, Any] | None = None
+    mtp_metrics_after: dict[str, Any] | None = None
+    mtp_metrics_delta: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

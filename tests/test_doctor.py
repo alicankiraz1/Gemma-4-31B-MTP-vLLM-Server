@@ -169,7 +169,11 @@ async def test_doctor_reports_observed_config_and_mtp_metric_separately():
         if request.url.path == "/metrics":
             return httpx.Response(
                 200,
-                text="vllm:spec_decode_draft_acceptance_rate 0.58\n",
+                text=(
+                    "vllm:spec_decode_num_drafts_total 2\n"
+                    "vllm:spec_decode_num_draft_tokens_total 8\n"
+                    "vllm:spec_decode_num_accepted_tokens_total 5\n"
+                ),
             )
         return httpx.Response(404)
 
@@ -186,6 +190,8 @@ async def test_doctor_reports_observed_config_and_mtp_metric_separately():
     assert report["config_verification"]["fields"]["quantization"]["status"] == "not_applicable"
     assert report["config_verification"]["fields"]["cpu_offload_gb"]["status"] == "unknown"
     assert report["config_matches"] is False
+    assert report["mtp"]["state"] == "active"
+    assert report["mtp"]["drafted_tokens_total"] == 8.0
     assert report["mtp_observed"] is True
 
 
@@ -243,7 +249,11 @@ async def test_doctor_verifies_runtime_fields_from_active_manifest(tmp_path):
         if request.url.path == "/metrics":
             return httpx.Response(
                 200,
-                text="vllm:spec_decode_draft_acceptance_rate 0.58\n",
+                text=(
+                    "vllm:spec_decode_num_drafts_total 2\n"
+                    "vllm:spec_decode_num_draft_tokens_total 8\n"
+                    "vllm:spec_decode_num_accepted_tokens_total 5\n"
+                ),
             )
         return httpx.Response(404)
 
@@ -343,3 +353,27 @@ async def test_doctor_redacts_private_served_model_name():
 
     assert report["served_model_name"] == "REDACTED_PATH"
     assert private_name not in json.dumps(report)
+
+
+@pytest.mark.asyncio
+async def test_doctor_reports_mtp_unavailable_when_metrics_endpoint_fails():
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "gemma-4-31b-mtp"}]})
+        if request.url.path == "/metrics":
+            return httpx.Response(404)
+        return httpx.Response(404)
+
+    report = await build_report(
+        profile=_profile(),
+        vllm_base_url="http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    assert report["mtp"]["state"] == "unavailable"
+    assert report["mtp_observed"] is False
