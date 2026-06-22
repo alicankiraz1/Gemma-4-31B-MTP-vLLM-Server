@@ -137,7 +137,8 @@ def test_readme_doctor_example_matches_current_shape():
     assert '"drafter_loaded": "unknown"' in readme
     assert '"version_ok": true' in readme
     assert '"target_served": true' in readme
-    assert '"config_matches": true' in readme
+    assert '"config_verification": {"status": "partial"' in readme
+    assert '"config_matches": false' in readme
     assert '"mtp_observed": true' in readme
     assert "drafter model id is not listed" not in readme
 

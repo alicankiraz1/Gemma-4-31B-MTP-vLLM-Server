@@ -11,6 +11,12 @@ import sys
 from typing import Any
 
 from gemma4_mtp_vllm.profiles import ModelProfile
+from gemma4_mtp_vllm.runtime_config import (
+    argv_fingerprint,
+    redact_argv,
+    redact_path,
+    redact_public_value,
+)
 
 
 def build_vllm_serve_args(
@@ -73,13 +79,14 @@ def build_launch_manifest(
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         "pid": os.getpid(),
-        "cwd": str(Path.cwd()),
+        "cwd": redact_path(str(Path.cwd())),
         "git_sha": _git_output("rev-parse", "HEAD"),
         "git_dirty": _git_dirty(),
         "profile": profile.name,
-        "served_model_name": served_model_name,
+        "served_model_name": redact_public_value(served_model_name),
         "enable_mtp": enable_mtp,
-        "argv": argv,
+        "argv": redact_argv(argv),
+        "argv_fingerprint": argv_fingerprint(argv),
         "package_versions": {
             name: _package_version(name)
             for name in (

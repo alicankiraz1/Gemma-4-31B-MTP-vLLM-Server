@@ -93,15 +93,71 @@ def test_health_uses_profile_max_output_default_when_limits_not_overridden():
             return httpx.Response(200, text="")
         return httpx.Response(404)
 
+    argv = [
+        "vllm",
+        "serve",
+        "google/gemma-4-31B-it",
+        "--served-model-name",
+        "gemma-4-31b-mtp",
+        "--tensor-parallel-size",
+        "2",
+        "--max-model-len",
+        "2048",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--cpu-offload-gb",
+        "8",
+        "--max-num-seqs",
+        "1",
+        "--max-num-batched-tokens",
+        "4096",
+        "--enforce-eager",
+        "--speculative-config",
+        '{"method":"mtp","model":"google/gemma-4-31B-it-assistant","num_speculative_tokens":4}',
+    ]
     app = create_app(
         profile_name="tp2_2x32_smoke",
         api_key="secret",
-        vllm_base_url="http://vllm.local:8000",
+        vllm_base_url="http://127.0.0.1:8000",
         vllm_transport=httpx.MockTransport(handler),
+        runtime_manifest={
+            "pid": 123,
+            "argv": argv,
+            "package_versions": {"torch": "2.11.0+cu130"},
+        },
+        active_backend_pid=123,
+        active_backend_argv=argv,
     )
     response = TestClient(app).get("/health", headers={"x-api-key": "secret"})
 
     assert response.status_code == 200
     body = response.json()
     assert body["limits"]["max_output_tokens"] == 1024
-    assert body["config_matches"] is True
+    assert body["config_verification"]["status"] == "partial"
+    assert body["config_verification"]["fields"]["cpu_offload_gb"]["status"] == "verified"
+    assert body["config_matches"] is False
+
+
+def test_health_redacts_private_model_alias():
+    private_alias = "/" + "home" + "/homelander/private-alias"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": private_alias}]})
+        return httpx.Response(404)
+
+    app = create_app(
+        api_key="secret",
+        model_alias=private_alias,
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["served_model_name"] == "REDACTED_PATH"
+    assert "REDACTED_PATH" in body["model_aliases"]
+    assert private_alias not in str(body)

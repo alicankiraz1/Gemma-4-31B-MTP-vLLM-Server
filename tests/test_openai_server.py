@@ -74,6 +74,25 @@ def test_models_endpoint_returns_aliases():
         assert item["display_name"] == "Gemma 4 31B MTP vLLM"
 
 
+def test_models_endpoint_redacts_private_alias():
+    private_alias = "/" + "home" + "/homelander/private-alias"
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            model_alias=private_alias,
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(_vllm_handler),
+        )
+    )
+
+    response = client.get("/v1/models", headers={"x-api-key": "secret"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "REDACTED_PATH" in {entry["id"] for entry in body["data"]}
+    assert private_alias not in str(body)
+
+
 def test_chat_completion_pass_through():
     CAPTURED.clear()
     response = _client().post(
@@ -90,6 +109,50 @@ def test_chat_completion_pass_through():
     assert body["choices"][0]["message"]["content"] == "Hi"
     assert CAPTURED["body"]["model"] == "gemma-4-31b-mtp"
     assert CAPTURED["body"]["max_tokens"] == 32
+
+
+def test_chat_completion_redacts_private_upstream_model_echo():
+    private_alias = "/" + "home" + "/homelander/private-alias"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-private",
+                    "object": "chat.completion",
+                    "model": private_alias,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            model_alias=private_alias,
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={"model": private_alias, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["model"] == "REDACTED_PATH"
+    assert private_alias not in str(body)
 
 
 def test_chat_completion_success_records_request_metrics():
@@ -414,6 +477,43 @@ def test_completions_endpoint():
     )
     assert response.status_code == 200
     assert response.json()["choices"][0]["text"] == "World"
+
+
+def test_completions_endpoint_redacts_private_upstream_model_echo():
+    private_alias = "/" + "home" + "/homelander/private-alias"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-private",
+                    "object": "text_completion",
+                    "model": private_alias,
+                    "choices": [{"text": "World", "finish_reason": "stop", "index": 0}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            model_alias=private_alias,
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={"model": private_alias, "prompt": "Hello", "max_tokens": 4},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["model"] == "REDACTED_PATH"
+    assert private_alias not in str(body)
 
 
 def test_completions_accepts_empty_string_prompt_and_forwards():

@@ -4,6 +4,7 @@ import json
 import asyncio
 import time
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -29,10 +30,17 @@ from gemma4_mtp_vllm.profiles import (
     resolve_profile,
 )
 from gemma4_mtp_vllm.runtime_config import (
+    build_config_verification,
     config_matches,
+    default_observed_config,
     desired_config,
-    mtp_observed_from_metrics,
+    merge_observed_config,
     observed_config_from_models,
+    observed_config_from_metrics,
+    observed_config_from_runtime_evidence,
+    observed_config_from_version,
+    public_observed_config,
+    redact_public_value,
 )
 from gemma4_mtp_vllm.server.bind_policy import bind_host_requires_api_key
 from gemma4_mtp_vllm.server.errors import protocol_error_response
@@ -147,6 +155,10 @@ def _prepare_openai_body(
     return body
 
 
+def _redact_openai_response(response: dict[str, Any]) -> dict[str, Any]:
+    return redact_public_value(response)
+
+
 async def openai_stream_to_anthropic_events_async(
     iterator,
     *,
@@ -179,6 +191,10 @@ def create_app(
     limits: ServerLimits | None = None,
     vllm_base_url: str = "http://127.0.0.1:8000",
     vllm_transport: httpx.BaseTransport | None = None,
+    runtime_manifest_path: Path | None = None,
+    runtime_manifest: dict[str, Any] | None = None,
+    active_backend_pid: int | None = None,
+    active_backend_argv: list[str] | None = None,
 ) -> FastAPI:
     if bind_host_requires_api_key(bind_host) and not api_key:
         raise ValueError(f"bind_host {bind_host} requires api_key")
@@ -265,13 +281,20 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, Any]:
         vllm_status, version_ok = await _probe_vllm_with_version(vllm)
-        desired = desired_config(selected)
+        desired = desired_config(selected, served_model_name=served_model_name)
         observed = await _observed_backend_config(
             vllm,
             selected,
             served_model_name=served_model_name,
+            vllm_version=vllm_status.get("version"),
+            runtime_manifest_path=runtime_manifest_path,
+            runtime_manifest=runtime_manifest,
+            active_backend_pid=active_backend_pid,
+            active_backend_argv=active_backend_argv,
         )
         matches = config_matches(desired, observed)
+        verification = build_config_verification(desired, observed)
+        public_observed = public_observed_config(observed)
         return {
             "status": (
                 "ready"
@@ -279,21 +302,22 @@ def create_app(
                 else "degraded"
             ),
             "profile": selected.name,
-            "target_model": selected.target,
-            "served_model_name": served_model_name,
+            "target_model": redact_public_value(selected.target),
+            "served_model_name": redact_public_value(served_model_name),
             "required_vllm_min_version": REQUIRED_VLLM_MIN_VERSION,
             "version_ok": version_ok,
-            "drafter": selected.drafter,
+            "drafter": redact_public_value(selected.drafter),
             "num_speculative_tokens": selected.num_speculative_tokens,
             "tensor_parallel_size": selected.tensor_parallel_size,
             "gpu_memory_utilization": selected.gpu_memory_utilization,
             "max_model_len": selected.max_model_len,
             "desired_config": desired,
-            "observed_config": observed,
+            "observed_config": public_observed,
+            "config_verification": verification,
             "config_matches": matches,
-            "target_served": observed.get("target_served", False),
-            "mtp_observed": observed.get("mtp_observed", False),
-            "model_aliases": aliases,
+            "target_served": public_observed.get("target_served", False),
+            "mtp_observed": public_observed.get("mtp_observed", False),
+            "model_aliases": redact_public_value(aliases),
             "vllm": vllm_status,
             "bind": {"host": bind_host},
             "limits": server_limits.public_dict(),
@@ -343,7 +367,7 @@ def create_app(
             "object": "list",
             "data": [
                 {
-                    "id": alias,
+                    "id": redact_public_value(alias),
                     "object": "model",
                     "owned_by": "local",
                     "display_name": MODEL_DISPLAY_NAME,
@@ -401,7 +425,7 @@ def create_app(
                         usage_tokens = _stream_usage_tokens(chunk, usage_tokens)
                         if _chunk_has_content_delta(chunk):
                             delta_tokens += 1
-                        yield f"data: {json.dumps(chunk)}\n\n"
+                        yield f"data: {json.dumps(_redact_openai_response(chunk))}\n\n"
                 except VllmHttpError as exc:
                     runtime_state.record_backend_error("vllm_http_error")
                     error = {
@@ -451,7 +475,7 @@ def create_app(
                 generation_seconds=elapsed,
                 batch_size=1,
             )
-            return JSONResponse(response)
+            return JSONResponse(_redact_openai_response(response))
         finally:
             slot.release()
 
@@ -503,7 +527,7 @@ def create_app(
                 generation_seconds=elapsed,
                 batch_size=1,
             )
-            return JSONResponse(response)
+            return JSONResponse(_redact_openai_response(response))
         finally:
             slot.release()
 
@@ -745,28 +769,41 @@ async def _observed_backend_config(
     profile: ModelProfile,
     *,
     served_model_name: str | None,
+    vllm_version: str | None = None,
+    runtime_manifest_path: Path | None = None,
+    runtime_manifest: dict[str, Any] | None = None,
+    active_backend_pid: int | None = None,
+    active_backend_argv: list[str] | None = None,
 ) -> dict[str, Any]:
-    observed: dict[str, Any] = {
-        "models": [],
-        "served_model_name": None,
-        "target_served": False,
-        "max_model_len": None,
-        "mtp_observed": False,
-    }
+    observed = merge_observed_config(
+        default_observed_config(),
+        observed_config_from_version(vllm_version),
+        observed_config_from_runtime_evidence(
+            runtime_manifest=runtime_manifest,
+            runtime_manifest_path=runtime_manifest_path,
+            active_backend_pid=active_backend_pid,
+            active_backend_argv=active_backend_argv,
+            vllm_base_url=vllm.base_url,
+        ),
+    )
     try:
         models_body = await vllm.list_models()
     except (VllmHttpError, httpx.HTTPError):
         return observed
 
-    observed.update(
+    observed = merge_observed_config(
+        observed,
         observed_config_from_models(
             models_body,
             target_model=profile.target,
             served_model_name=served_model_name,
-        )
+        ),
     )
     try:
-        observed["mtp_observed"] = mtp_observed_from_metrics(await vllm.metrics_text())
+        observed = merge_observed_config(
+            observed,
+            observed_config_from_metrics(await vllm.metrics_text()),
+        )
     except (VllmHttpError, httpx.HTTPError):
         observed["mtp_observed"] = False
     return observed

@@ -226,7 +226,7 @@ vllm-mtp launch --profile safe80 --print-only
 
 Non-`--print-only` launches write a runtime manifest before replacing the
 process with `vllm serve`. The default path is
-`logs/vllm-launch-manifest.json`; it includes the exact argv, PID, git SHA,
+`logs/vllm-launch-manifest.json`; it includes a redacted argv, PID, git SHA,
 package versions, selected profile, served model name, and timestamp.
 
 For the constrained 2x RTX 5090 smoke profile:
@@ -265,15 +265,17 @@ vllm-mtp doctor --profile tp2_2x32_smoke --vllm-base-url http://127.0.0.1:8012
 Expected output shape (single-line JSON):
 
 ```json
-{"ok": true, "profile": "tp2_2x32_smoke", "target_model": "google/gemma-4-31B-it", "served_model_name": "gemma-4-31b-mtp", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 2, "gateway_version": "0.2.0a1", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true, "desired_config": {"max_model_len": 2048}, "observed_config": {"max_model_len": 2048, "target_served": true}, "config_matches": true, "mtp_observed": true}
+{"ok": true, "profile": "tp2_2x32_smoke", "target_model": "google/gemma-4-31B-it", "served_model_name": "gemma-4-31b-mtp", "drafter": "google/gemma-4-31B-it-assistant", "drafter_configured": "google/gemma-4-31B-it-assistant", "drafter_loaded": "unknown", "num_speculative_tokens": 4, "tensor_parallel_size": 2, "gateway_version": "0.2.0a1", "required_vllm_min_version": "0.21.0", "vllm": {"status": "ok", "version": "0.21.0"}, "version_ok": true, "target_served": true, "desired_config": {"max_model_len": 2048}, "observed_config": {"max_model_len": 2048, "target_served": true}, "config_verification": {"status": "partial", "fields": {"max_model_len": {"status": "verified", "source": "vllm_models_api"}, "cpu_offload_gb": {"status": "unknown", "source": "unknown"}}}, "config_matches": false, "mtp_observed": true}
 ```
 
 `ok: false` indicates vLLM is unreachable, older than the required version, or
 the target model is not listed in vLLM's `/v1/models`. Real vLLM reports the
 served target model there; the drafter is reported as configured by this
-gateway and `drafter_loaded` remains `unknown`. `config_matches` and
-`mtp_observed` are separate runtime truth fields; connectivity alone does not
-prove the backend was launched with the selected profile or MTP path.
+gateway and `drafter_loaded` remains `unknown`. `config_verification` reports
+field-level `verified`, `mismatch`, `unknown`, or `not_applicable` statuses.
+`config_matches` is true only when all required runtime fields are verified;
+connectivity alone does not prove the backend was launched with the selected
+profile or MTP path.
 
 ## Benchmarks
 
@@ -469,14 +471,14 @@ python -m build --wheel
 
 ### Local Verification (2026-05-17)
 
-- `python -m pytest -q` -> `191 passed`
+- `python -m pytest -q` -> `218 passed`
 - `python -m pip check` → `No broken requirements found.`
 - `python -m compileall -q src` → no errors
 - `python -m build --wheel` → built `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
 - `scripts/verify_wheel_freshness.sh` → `wheel smoke ok`
 - `scripts/make_source_archive.sh` + `scripts/verify_source_archive.sh` → archive clean
 
-191 tests cover profiles, server limits, bind policy, errors, runtime state,
+218 tests cover profiles, server limits, bind policy, errors, runtime state,
 middleware, policy validation, request validation, vLLM HTTP client, Anthropic
 adapter, server app foundation, health, metrics, OpenAI endpoints, Anthropic
 endpoints, doctor, benchmarking, launch helper, CLI, bench CLI, versioning, and

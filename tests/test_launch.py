@@ -119,6 +119,51 @@ def test_build_launch_manifest_includes_runtime_fingerprint():
     assert "gemma4-mtp-vllm" in manifest["package_versions"]
 
 
+def test_build_launch_manifest_redacts_secret_argv_values():
+    profile = _smoke_profile()
+    args = build_vllm_serve_args(profile=profile) + ["--api-key", "secret-token"]
+
+    manifest = build_launch_manifest(
+        profile=profile,
+        argv=args,
+        enable_mtp=True,
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    assert manifest["argv"][-1] == "REDACTED"
+    assert len(manifest["argv_fingerprint"]) == 64
+    assert "secret-token" not in " ".join(manifest["argv"])
+
+
+def test_build_launch_manifest_redacts_private_cwd(monkeypatch):
+    private_cwd = "/" + "home" + "/homelander/private-repo"
+    monkeypatch.setattr("gemma4_mtp_vllm.launch.Path.cwd", lambda: private_cwd)
+
+    manifest = build_launch_manifest(
+        profile=_smoke_profile(),
+        argv=build_vllm_serve_args(profile=_smoke_profile()),
+        enable_mtp=True,
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    assert manifest["cwd"] == "REDACTED_PATH"
+    assert private_cwd not in str(manifest)
+
+
+def test_build_launch_manifest_redacts_private_served_model_name():
+    private_name = "/" + "home" + "/homelander/private-served-name"
+
+    manifest = build_launch_manifest(
+        profile=_smoke_profile(),
+        argv=build_vllm_serve_args(profile=_smoke_profile()),
+        enable_mtp=True,
+        served_model_name=private_name,
+    )
+
+    assert manifest["served_model_name"] == "REDACTED_PATH"
+    assert private_name not in str(manifest)
+
+
 def test_launch_manifest_git_dirty_includes_untracked_files(monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -17,6 +17,10 @@ class VllmClient:
         self._http = http
         self._base_url = base_url.rstrip("/")
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     async def __aenter__(self) -> "VllmClient":
         return self
 
