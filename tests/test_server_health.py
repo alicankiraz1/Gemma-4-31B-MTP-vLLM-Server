@@ -1,9 +1,57 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 from fastapi.testclient import TestClient
 
-from gemma4_mtp_vllm.server.app import create_app
+from gemma4_mtp_vllm.server.app import create_app, _mtp_state_for_generation
+
+
+def _fp8_runtime_argv(*, cpu_offload_gb: str = "0") -> list[str]:
+    return [
+        "vllm",
+        "serve",
+        "google/gemma-4-31B-it",
+        "--served-model-name",
+        "gemma-4-31b-mtp",
+        "--tensor-parallel-size",
+        "2",
+        "--max-model-len",
+        "2048",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--cpu-offload-gb",
+        cpu_offload_gb,
+        "--max-num-seqs",
+        "1",
+        "--max-num-batched-tokens",
+        "4096",
+        "--enforce-eager",
+        "--quantization",
+        "fp8",
+        "--speculative-config",
+        '{"method":"mtp","model":"google/gemma-4-31B-it-assistant","num_speculative_tokens":4}',
+    ]
+
+
+def test_mtp_generation_probe_is_bounded_when_metrics_stalls():
+    class StalledVllm:
+        async def metrics_text(self) -> str:
+            await asyncio.sleep(10)
+            return ""
+
+    async def scenario():
+        return await _mtp_state_for_generation(
+            StalledVllm(),
+            "gemma-4-31b-mtp",
+            timeout_seconds=0.01,
+        )
+
+    mtp = asyncio.run(scenario())
+
+    assert mtp["state"] == "unavailable"
+    assert mtp["metrics_registered"] is False
 
 
 def _client(api_key="secret"):
@@ -64,6 +112,8 @@ def test_health_returns_profile_and_vllm_info():
     assert body["observed_config"]["target_served"] is True
     assert body["config_matches"] is False
     assert body["target_served"] is True
+    assert body["readiness"]["state"] == "degraded"
+    assert "old_vllm_version" in body["readiness"]["reasons"]
     assert body["mtp_observed"] is True
     assert body["mtp"]["state"] == "active"
     assert body["mtp"]["drafted_tokens_total"] == 8.0
@@ -82,6 +132,53 @@ def test_health_returns_profile_and_vllm_info():
     assert body["token_counting"] == "backend_tokenizer"
     assert "true_token_streaming" not in body
     assert "continuous_batching" not in body
+
+
+def test_health_reports_ready_when_required_runtime_fields_match():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    'vllm:spec_decode_num_drafts_total{model_name="gemma-4-31b-mtp"} 2\n'
+                    'vllm:spec_decode_num_draft_tokens_total{model_name="gemma-4-31b-mtp"} 8\n'
+                    'vllm:spec_decode_num_accepted_tokens_total{model_name="gemma-4-31b-mtp"} 6\n'
+                ),
+            )
+        return httpx.Response(404)
+
+    argv = _fp8_runtime_argv()
+    app = create_app(
+        profile_name="tp2_2x32_fp8_gpuonly",
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+        runtime_manifest={
+            "pid": 123,
+            "argv": argv,
+            "package_versions": {"torch": "2.11.0+cu130", "vllm": "0.21.0"},
+        },
+        active_backend_pid=123,
+        active_backend_argv=argv,
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["status"] == "ready"
+    assert body["readiness"]["state"] == "ready"
+    assert body["readiness"]["reasons"] == []
+    assert body["target_served"] is True
+    assert body["version_ok"] is True
+    assert body["config_verification"]["fields"]["cpu_offload_gb"]["status"] == "verified"
+    assert body["mtp"]["state"] == "active"
 
 
 def test_health_uses_profile_max_output_default_when_limits_not_overridden():
@@ -142,6 +239,185 @@ def test_health_uses_profile_max_output_default_when_limits_not_overridden():
     assert body["config_verification"]["status"] == "partial"
     assert body["config_verification"]["fields"]["cpu_offload_gb"]["status"] == "verified"
     assert body["config_matches"] is False
+
+
+def test_health_warms_when_mtp_metrics_are_idle_before_first_generation():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    'vllm:spec_decode_num_drafts_total{model_name="gemma-4-31b-mtp"} 0\n'
+                    'vllm:spec_decode_num_draft_tokens_total{model_name="gemma-4-31b-mtp"} 0\n'
+                    'vllm:spec_decode_num_accepted_tokens_total{model_name="gemma-4-31b-mtp"} 0\n'
+                ),
+            )
+        return httpx.Response(404)
+
+    argv = _fp8_runtime_argv()
+    app = create_app(
+        profile_name="tp2_2x32_fp8_gpuonly",
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+        runtime_manifest={"pid": 123, "argv": argv},
+        active_backend_pid=123,
+        active_backend_argv=argv,
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["status"] == "warming"
+    assert body["readiness"]["state"] == "warming"
+    assert "mtp_not_exercised" in body["readiness"]["warnings"]
+    assert body["mtp"]["state"] == "registered_but_idle"
+
+
+def test_health_degrades_when_mtp_profile_was_exercised_but_remained_idle():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    'vllm:spec_decode_num_drafts_total{model_name="gemma-4-31b-mtp"} 0\n'
+                    'vllm:spec_decode_num_draft_tokens_total{model_name="gemma-4-31b-mtp"} 0\n'
+                    'vllm:spec_decode_num_accepted_tokens_total{model_name="gemma-4-31b-mtp"} 0\n'
+                ),
+            )
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    argv = _fp8_runtime_argv()
+    app = create_app(
+        profile_name="tp2_2x32_fp8_gpuonly",
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+        runtime_manifest={"pid": 123, "argv": argv},
+        active_backend_pid=123,
+        active_backend_argv=argv,
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret"},
+        json={"model": "gemma-4-31b-mtp", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert response.status_code == 200
+
+    body = client.get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["status"] == "degraded"
+    assert body["readiness"]["state"] == "degraded"
+    assert "mtp_inactive_after_generation" in body["readiness"]["reasons"]
+    assert "mtp_inactive_after_generation" in body["readiness"]["warnings"]
+    assert body["runtime"]["total_requests"] == 1
+
+
+def test_health_degrades_when_last_generation_has_no_mtp_delta():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    'vllm:spec_decode_num_drafts_total{model_name="gemma-4-31b-mtp"} 240\n'
+                    'vllm:spec_decode_num_draft_tokens_total{model_name="gemma-4-31b-mtp"} 960\n'
+                    'vllm:spec_decode_num_accepted_tokens_total{model_name="gemma-4-31b-mtp"} 863\n'
+                ),
+            )
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    argv = _fp8_runtime_argv()
+    app = create_app(
+        profile_name="tp2_2x32_fp8_gpuonly",
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+        runtime_manifest={"pid": 123, "argv": argv},
+        active_backend_pid=123,
+        active_backend_argv=argv,
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret"},
+        json={"model": "gemma-4-31b-mtp", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert response.status_code == 200
+
+    body = client.get("/health", headers={"x-api-key": "secret"}).json()
+
+    assert body["mtp"]["state"] == "active"
+    assert body["runtime"]["last_mtp_delta"]["state"] == "registered_but_idle"
+    assert body["status"] == "degraded"
+    assert "mtp_inactive_after_generation" in body["readiness"]["reasons"]
 
 
 def test_health_reports_registered_but_idle_mtp_metrics():

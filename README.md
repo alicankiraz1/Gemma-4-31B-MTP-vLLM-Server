@@ -475,18 +475,29 @@ python -m build --wheel
 
 ### Local Verification (2026-05-17)
 
-- `python -m pytest -q` -> `229 passed`
+- `python -m pytest -q` -> `218 passed`
 - `python -m pip check` → `No broken requirements found.`
 - `python -m compileall -q src` → no errors
 - `python -m build --wheel` → built `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
 - `scripts/verify_wheel_freshness.sh` → `wheel smoke ok`
 - `scripts/make_source_archive.sh` + `scripts/verify_source_archive.sh` → archive clean
 
-229 tests cover profiles, server limits, bind policy, errors, runtime state,
+218 tests cover profiles, server limits, bind policy, errors, runtime state,
 middleware, policy validation, request validation, vLLM HTTP client, Anthropic
 adapter, server app foundation, health, metrics, OpenAI endpoints, Anthropic
 endpoints, doctor, benchmarking, launch helper, CLI, bench CLI, versioning, and
 release scripts.
+
+### P0-004 Local Verification (2026-06-22)
+
+- `python -m pytest -q` -> `243 passed`
+- `python -m pip check` → `No broken requirements found.`
+- `python -m compileall -q src` → no errors
+- `git diff --check` → no errors
+- secret and local-path scan → clean
+
+243 tests cover the prior release surface plus readiness state-machine behavior,
+MTP per-generation delta evidence, and streaming slot lifecycle regressions.
 
 ## Operational Notes
 

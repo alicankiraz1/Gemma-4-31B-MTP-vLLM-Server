@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 class QueueFull(Exception):
@@ -27,6 +28,7 @@ class RuntimeState:
         self._generation_tokens = 0
         self._generation_seconds = 0.0
         self._batch_requests = 0
+        self._last_mtp_delta: dict[str, Any] | None = None
         self._last_request_id: str | None = None
         self._last_backend_error: str | None = None
 
@@ -69,6 +71,9 @@ class RuntimeState:
         self._backend_errors += 1
         self._last_backend_error = code
 
+    def record_mtp_delta(self, delta: dict[str, Any]) -> None:
+        self._last_mtp_delta = dict(delta)
+
     def clear_backend_error(self) -> None:
         self._last_backend_error = None
 
@@ -85,5 +90,6 @@ class RuntimeState:
             "generation_tokens": self._generation_tokens,
             "generation_seconds": self._generation_seconds,
             "batch_requests": self._batch_requests,
+            "last_mtp_delta": self._last_mtp_delta,
             "last_request_id": self._last_request_id,
         }

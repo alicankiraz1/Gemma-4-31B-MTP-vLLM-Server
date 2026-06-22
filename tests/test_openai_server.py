@@ -402,6 +402,104 @@ def test_chat_completion_streaming_releases_request_slot_after_consumption():
     assert generation_seconds > 0
 
 
+def test_chat_completion_streaming_releases_slot_when_mtp_probe_is_cancelled(monkeypatch):
+    mtp_probe_calls = 0
+
+    async def fake_mtp_state(*_args, **_kwargs):
+        nonlocal mtp_probe_calls
+        mtp_probe_calls += 1
+        if mtp_probe_calls > 1:
+            raise asyncio.CancelledError()
+        return {"state": "active", "metrics_registered": True}
+
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.server.app._mtp_state_for_generation",
+        fake_mtp_state,
+    )
+    chunks_body = (
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=chunks_body,
+            )
+        return httpx.Response(404)
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+
+    try:
+        client.post(
+            "/v1/chat/completions",
+            headers={"x-api-key": "secret", "content-type": "application/json"},
+            json={
+                "model": "gemma-4-31b-mtp",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+        )
+    except BaseException as exc:
+        assert isinstance(exc, asyncio.CancelledError)
+
+    metrics = client.get("/metrics", headers={"x-api-key": "secret"}).text
+    assert "gemma4_mtp_active_requests 0" in metrics
+
+
+def test_chat_completion_streaming_releases_slot_when_initial_mtp_probe_is_cancelled(monkeypatch):
+    async def fake_mtp_state(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.server.app._mtp_state_for_generation",
+        fake_mtp_state,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b"data: [DONE]\n\n",
+            )
+        return httpx.Response(404)
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+
+    try:
+        client.post(
+            "/v1/chat/completions",
+            headers={"x-api-key": "secret", "content-type": "application/json"},
+            json={
+                "model": "gemma-4-31b-mtp",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "No response returned."
+    except asyncio.CancelledError:
+        pass
+
+    metrics = client.get("/metrics", headers={"x-api-key": "secret"}).text
+    assert "gemma4_mtp_active_requests 0" in metrics
+
+
 def test_chat_completion_queue_full_rejects_without_forwarding():
     forwarded = False
 

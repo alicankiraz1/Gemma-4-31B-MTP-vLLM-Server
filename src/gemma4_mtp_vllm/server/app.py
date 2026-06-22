@@ -18,6 +18,7 @@ from gemma4_mtp_vllm.anthropic_adapter import (
     openai_stream_to_anthropic_events,
 )
 from gemma4_mtp_vllm.backend.vllm_client import VllmClient, VllmHttpError
+from gemma4_mtp_vllm.mtp_metrics import mtp_metric_delta
 from gemma4_mtp_vllm.policy import (
     UnsupportedFeature,
     validate_anthropic_request,
@@ -29,6 +30,7 @@ from gemma4_mtp_vllm.profiles import (
     load_profiles,
     resolve_profile,
 )
+from gemma4_mtp_vllm.readiness import build_readiness_state
 from gemma4_mtp_vllm.runtime_config import (
     build_config_verification,
     config_matches,
@@ -61,6 +63,8 @@ DEFAULT_ANTHROPIC_MODEL_ALIAS = "claude-gemma-4-31b-mtp"
 MODEL_DISPLAY_NAME = "Gemma 4 31B MTP vLLM"
 DEFAULT_BIND_HOST = "127.0.0.1"
 PUBLIC_PATHS = {"/livez"}
+VLLM_READINESS_PROBE_TIMEOUT_SECONDS = 0.5
+MTP_METRICS_PROBE_TIMEOUT_SECONDS = 0.5
 
 
 async def _bounded_json(
@@ -249,19 +253,57 @@ def create_app(
     async def livez() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/readyz")
-    async def readyz() -> dict[str, Any]:
+    async def _current_readiness_context() -> dict[str, Any]:
         vllm_status, version_ok = await _probe_vllm_with_version(vllm)
-        readiness = (
-            "ready"
-            if vllm_status.get("status") == "ok" and version_ok
-            else "degraded"
+        desired = desired_config(selected, served_model_name=served_model_name)
+        observed = await _observed_backend_config(
+            vllm,
+            selected,
+            served_model_name=served_model_name,
+            vllm_version=vllm_status.get("version"),
+            runtime_manifest_path=runtime_manifest_path,
+            runtime_manifest=runtime_manifest,
+            active_backend_pid=active_backend_pid,
+            active_backend_argv=active_backend_argv,
+        )
+        matches = config_matches(desired, observed)
+        verification = build_config_verification(desired, observed)
+        public_observed = public_observed_config(observed)
+        runtime = runtime_state.snapshot()
+        readiness = build_readiness_state(
+            profile=selected,
+            vllm_status=vllm_status,
+            version_ok=version_ok,
+            target_served=bool(public_observed.get("target_served", False)),
+            config_verification=verification,
+            mtp=public_observed.get("mtp"),
+            runtime=runtime,
+            last_backend_error=runtime_state.last_backend_error,
         )
         return {
-            "status": readiness,
-            "required_vllm_min_version": REQUIRED_VLLM_MIN_VERSION,
+            "vllm_status": vllm_status,
             "version_ok": version_ok,
-            "vllm": vllm_status,
+            "desired": desired,
+            "observed": public_observed,
+            "config_verification": verification,
+            "config_matches": matches,
+            "runtime": runtime,
+            "readiness": readiness,
+        }
+
+    @app.get("/readyz")
+    async def readyz() -> dict[str, Any]:
+        context = await _current_readiness_context()
+        observed = context["observed"]
+        return {
+            "status": context["readiness"]["state"],
+            "readiness": context["readiness"],
+            "required_vllm_min_version": REQUIRED_VLLM_MIN_VERSION,
+            "version_ok": context["version_ok"],
+            "vllm": context["vllm_status"],
+            "target_served": observed.get("target_served", False),
+            "config_verification": context["config_verification"],
+            "mtp": observed.get("mtp"),
             "last_backend_error": runtime_state.last_backend_error,
         }
 
@@ -280,49 +322,33 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        vllm_status, version_ok = await _probe_vllm_with_version(vllm)
-        desired = desired_config(selected, served_model_name=served_model_name)
-        observed = await _observed_backend_config(
-            vllm,
-            selected,
-            served_model_name=served_model_name,
-            vllm_version=vllm_status.get("version"),
-            runtime_manifest_path=runtime_manifest_path,
-            runtime_manifest=runtime_manifest,
-            active_backend_pid=active_backend_pid,
-            active_backend_argv=active_backend_argv,
-        )
-        matches = config_matches(desired, observed)
-        verification = build_config_verification(desired, observed)
-        public_observed = public_observed_config(observed)
+        context = await _current_readiness_context()
+        public_observed = context["observed"]
         return {
-            "status": (
-                "ready"
-                if vllm_status.get("status") == "ok" and version_ok
-                else "degraded"
-            ),
+            "status": context["readiness"]["state"],
+            "readiness": context["readiness"],
             "profile": selected.name,
             "target_model": redact_public_value(selected.target),
             "served_model_name": redact_public_value(served_model_name),
             "required_vllm_min_version": REQUIRED_VLLM_MIN_VERSION,
-            "version_ok": version_ok,
+            "version_ok": context["version_ok"],
             "drafter": redact_public_value(selected.drafter),
             "num_speculative_tokens": selected.num_speculative_tokens,
             "tensor_parallel_size": selected.tensor_parallel_size,
             "gpu_memory_utilization": selected.gpu_memory_utilization,
             "max_model_len": selected.max_model_len,
-            "desired_config": desired,
+            "desired_config": context["desired"],
             "observed_config": public_observed,
-            "config_verification": verification,
-            "config_matches": matches,
+            "config_verification": context["config_verification"],
+            "config_matches": context["config_matches"],
             "target_served": public_observed.get("target_served", False),
             "mtp": public_observed.get("mtp"),
             "mtp_observed": public_observed.get("mtp_observed", False),
             "model_aliases": redact_public_value(aliases),
-            "vllm": vllm_status,
+            "vllm": context["vllm_status"],
             "bind": {"host": bind_host},
             "limits": server_limits.public_dict(),
-            "runtime": runtime_state.snapshot(),
+            "runtime": context["runtime"],
             "auth_modes": ["bearer", "x-api-key"],
             "tools_supported": False,
             "multimodal_supported": False,
@@ -412,6 +438,12 @@ def create_app(
             return slot
 
         if streaming:
+            try:
+                mtp_before = await _mtp_state_for_generation(vllm, served_model_name)
+            except BaseException:
+                slot.release()
+                raise
+
             async def event_stream():
                 start = time.perf_counter()
                 delta_tokens = 0
@@ -438,21 +470,31 @@ def create_app(
                     yield f"data: {json.dumps(error)}\n\n"
                     yield "data: [DONE]\n\n"
                 finally:
-                    if stream_completed or delta_tokens > 0 or usage_tokens is not None:
-                        runtime_state.record_generation(
-                            generation_tokens=(
-                                usage_tokens
-                                if usage_tokens is not None
-                                else delta_tokens
-                            ),
-                            generation_seconds=time.perf_counter() - start,
-                            batch_size=1,
-                        )
-                    slot.release()
+                    try:
+                        if stream_completed or delta_tokens > 0 or usage_tokens is not None:
+                            runtime_state.record_generation(
+                                generation_tokens=(
+                                    usage_tokens
+                                    if usage_tokens is not None
+                                    else delta_tokens
+                                ),
+                                generation_seconds=time.perf_counter() - start,
+                                batch_size=1,
+                            )
+                            mtp_after = await _mtp_state_for_generation(
+                                vllm,
+                                served_model_name,
+                            )
+                            runtime_state.record_mtp_delta(
+                                mtp_metric_delta(mtp_before, mtp_after)
+                            )
+                    finally:
+                        slot.release()
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
         try:
+            mtp_before = await _mtp_state_for_generation(vllm, served_model_name)
             start = time.perf_counter()
             response = await _with_generation_timeout(
                 vllm.chat_completion(body),
@@ -476,6 +518,8 @@ def create_app(
                 generation_seconds=elapsed,
                 batch_size=1,
             )
+            mtp_after = await _mtp_state_for_generation(vllm, served_model_name)
+            runtime_state.record_mtp_delta(mtp_metric_delta(mtp_before, mtp_after))
             return JSONResponse(_redact_openai_response(response))
         finally:
             slot.release()
@@ -505,6 +549,7 @@ def create_app(
         if isinstance(slot, JSONResponse):
             return slot
         try:
+            mtp_before = await _mtp_state_for_generation(vllm, served_model_name)
             start = time.perf_counter()
             response = await _with_generation_timeout(
                 vllm.completion(body),
@@ -528,6 +573,8 @@ def create_app(
                 generation_seconds=elapsed,
                 batch_size=1,
             )
+            mtp_after = await _mtp_state_for_generation(vllm, served_model_name)
+            runtime_state.record_mtp_delta(mtp_metric_delta(mtp_before, mtp_after))
             return JSONResponse(_redact_openai_response(response))
         finally:
             slot.release()
@@ -575,6 +622,12 @@ def create_app(
             return slot
 
         if streaming:
+            try:
+                mtp_before = await _mtp_state_for_generation(vllm, served_model_name)
+            except BaseException:
+                slot.release()
+                raise
+
             async def event_stream():
                 prompt_tokens = 0
                 start = time.perf_counter()
@@ -614,21 +667,31 @@ def create_app(
                     yield "event: error\n"
                     yield f"data: {json.dumps(err)}\n\n"
                 finally:
-                    if stream_completed or delta_tokens > 0 or usage_tokens is not None:
-                        runtime_state.record_generation(
-                            generation_tokens=(
-                                usage_tokens
-                                if usage_tokens is not None
-                                else delta_tokens
-                            ),
-                            generation_seconds=time.perf_counter() - start,
-                            batch_size=1,
-                        )
-                    slot.release()
+                    try:
+                        if stream_completed or delta_tokens > 0 or usage_tokens is not None:
+                            runtime_state.record_generation(
+                                generation_tokens=(
+                                    usage_tokens
+                                    if usage_tokens is not None
+                                    else delta_tokens
+                                ),
+                                generation_seconds=time.perf_counter() - start,
+                                batch_size=1,
+                            )
+                            mtp_after = await _mtp_state_for_generation(
+                                vllm,
+                                served_model_name,
+                            )
+                            runtime_state.record_mtp_delta(
+                                mtp_metric_delta(mtp_before, mtp_after)
+                            )
+                    finally:
+                        slot.release()
 
             return StreamingResponse(event_stream(), media_type="text/event-stream")
 
         try:
+            mtp_before = await _mtp_state_for_generation(vllm, served_model_name)
             start = time.perf_counter()
             openai_response = await _with_generation_timeout(
                 vllm.chat_completion(openai_body),
@@ -657,6 +720,8 @@ def create_app(
                 generation_seconds=elapsed,
                 batch_size=1,
             )
+            mtp_after = await _mtp_state_for_generation(vllm, served_model_name)
+            runtime_state.record_mtp_delta(mtp_metric_delta(mtp_before, mtp_after))
             anthropic_body = openai_response_to_anthropic(
                 openai_response,
                 anthropic_model=payload.get("model") or DEFAULT_ANTHROPIC_MODEL_ALIAS,
@@ -788,8 +853,8 @@ async def _observed_backend_config(
         ),
     )
     try:
-        models_body = await vllm.list_models()
-    except (VllmHttpError, httpx.HTTPError):
+        models_body = await _vllm_readiness_probe(vllm.list_models())
+    except (asyncio.TimeoutError, VllmHttpError, httpx.HTTPError):
         pass
     else:
         observed = merge_observed_config(
@@ -804,11 +869,11 @@ async def _observed_backend_config(
         observed = merge_observed_config(
             observed,
             observed_config_from_metrics(
-                await vllm.metrics_text(),
+                await _vllm_readiness_probe(vllm.metrics_text()),
                 model_name=served_model_name,
             ),
         )
-    except (VllmHttpError, httpx.HTTPError):
+    except (asyncio.TimeoutError, VllmHttpError, httpx.HTTPError):
         observed = merge_observed_config(
             observed,
             observed_config_from_metrics("", model_name=served_model_name),
@@ -816,10 +881,38 @@ async def _observed_backend_config(
     return observed
 
 
+async def _mtp_state_for_generation(
+    vllm: VllmClient,
+    served_model_name: str | None,
+    *,
+    timeout_seconds: float = MTP_METRICS_PROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    try:
+        metrics_text = await asyncio.wait_for(
+            vllm.metrics_text(),
+            timeout=timeout_seconds,
+        )
+    except (asyncio.TimeoutError, VllmHttpError, httpx.HTTPError):
+        metrics_text = ""
+    observed = observed_config_from_metrics(
+        metrics_text,
+        model_name=served_model_name,
+    )
+    mtp = observed.get("mtp")
+    return mtp if isinstance(mtp, dict) else {}
+
+
 async def _with_generation_timeout(coro, timeout_seconds: float | None):
     if timeout_seconds is None:
         return await coro
     return await asyncio.wait_for(coro, timeout=timeout_seconds)
+
+
+async def _vllm_readiness_probe(coro):
+    return await asyncio.wait_for(
+        coro,
+        timeout=VLLM_READINESS_PROBE_TIMEOUT_SECONDS,
+    )
 
 
 def _vllm_error_response(
@@ -880,12 +973,14 @@ def _chunk_has_content_delta(chunk: dict[str, Any]) -> bool:
 
 async def _probe_vllm(vllm: VllmClient) -> dict[str, Any]:
     try:
-        body = await vllm.health()
+        body = await _vllm_readiness_probe(vllm.health())
         if isinstance(body, dict) and body.get("status") == "ok":
             return {"status": "ok"}
         return {"status": "degraded", "raw": body}
     except VllmHttpError as exc:
         return {"status": "unreachable", "http_status": exc.status_code}
+    except asyncio.TimeoutError:
+        return {"status": "unreachable", "error": "timeout"}
     except httpx.HTTPError as exc:
         return {"status": "unreachable", "error": str(exc)}
 
@@ -894,9 +989,9 @@ async def _probe_vllm_with_version(vllm: VllmClient) -> tuple[dict[str, Any], bo
     vllm_status = await _probe_vllm(vllm)
     if vllm_status.get("status") == "ok":
         try:
-            version_body = await vllm.version()
+            version_body = await _vllm_readiness_probe(vllm.version())
             vllm_status["version"] = version_body.get("version")
-        except VllmHttpError:
+        except (asyncio.TimeoutError, VllmHttpError, httpx.HTTPError):
             vllm_status["version"] = None
 
     version_ok = version_at_least(

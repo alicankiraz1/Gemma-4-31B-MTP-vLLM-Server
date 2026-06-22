@@ -22,6 +22,7 @@ def test_initial_snapshot_is_zeroed():
         "generation_tokens": 0,
         "generation_seconds": 0.0,
         "batch_requests": 0,
+        "last_mtp_delta": None,
         "last_request_id": None,
     }
 
@@ -37,6 +38,16 @@ def test_record_generation_updates_counters():
     assert snapshot["generation_tokens"] == 12
     assert snapshot["generation_seconds"] == pytest.approx(0.5)
     assert snapshot["batch_requests"] == 1
+
+
+def test_record_mtp_delta_updates_snapshot():
+    state = RuntimeState(max_queue_size=4)
+    state.record_mtp_delta({"state": "active", "drafted_tokens_delta": 8.0})
+
+    assert state.snapshot()["last_mtp_delta"] == {
+        "state": "active",
+        "drafted_tokens_delta": 8.0,
+    }
 
 
 def test_record_backend_error_sets_last_error():
