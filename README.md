@@ -310,6 +310,7 @@ vllm-mtp bench \
     --baseline-url http://127.0.0.1:8002 \
     --runs 3 \
     --warmup-runs 1 \
+    --artifact-root artifacts/benchmarks \
     --json-output bench-results/safe80.json
 ```
 
@@ -336,8 +337,9 @@ vllm-mtp bench-matrix \
 
 vLLM has reported very low draft acceptance rates (~0.2%) for Gemma 4 31B
 MTP in some setups. The bench harness measures this directly through
-`generation_tps` comparisons. If your `median_speedup` is close to `1.0`
-even with MTP enabled, you are likely hitting that upstream regression.
+`e2e_output_tokens_per_second` comparisons and MTP metric deltas. If your
+median speedup is close to `1.0` even with MTP enabled, you are likely hitting
+that upstream regression.
 See https://github.com/vllm-project/vllm/issues/41789 for the active
 discussion.
 
