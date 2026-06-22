@@ -3,7 +3,10 @@ from __future__ import annotations
 import uuid
 from typing import Any, Iterable, Iterator
 
-from gemma4_mtp_vllm.backend.response_parser import visible_text_for_history
+from gemma4_mtp_vllm.backend.response_parser import (
+    ThoughtSanitizer,
+    visible_text_for_history,
+)
 
 
 def anthropic_request_to_openai(
@@ -58,6 +61,7 @@ def openai_stream_to_anthropic_events(
     output_tokens = 0
     stop_reason = "end_turn"
     started_content = False
+    sanitizer = ThoughtSanitizer()
 
     yield {
         "type": "message_start",
@@ -83,6 +87,8 @@ def openai_stream_to_anthropic_events(
         delta = primary.get("delta") or {}
         content = delta.get("content")
         if content:
+            content = sanitizer.feed(content)
+        if content:
             if not started_content:
                 yield {
                     "type": "content_block_start",
@@ -99,6 +105,22 @@ def openai_stream_to_anthropic_events(
         finish_reason = primary.get("finish_reason")
         if finish_reason:
             stop_reason = _stop_reason(finish_reason)
+
+    content = sanitizer.finish()
+    if content:
+        if not started_content:
+            yield {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            }
+            started_content = True
+        output_tokens += 1
+        yield {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": content},
+        }
 
     if started_content:
         yield {"type": "content_block_stop", "index": 0}
@@ -123,9 +145,10 @@ def _build_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
             if not isinstance(message, dict):
                 continue
             role = str(message.get("role") or "user")
-            content = _content_to_text(message.get("content"))
-            if role == "assistant":
-                content = visible_text_for_history(content)
+            content = _content_to_text(
+                message.get("content"),
+                sanitize_thoughts=role == "assistant",
+            )
             messages.append(
                 {
                     "role": role,
@@ -135,7 +158,9 @@ def _build_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
     return messages
 
 
-def _content_to_text(content: Any) -> str:
+def _content_to_text(content: Any, *, sanitize_thoughts: bool = False) -> str:
+    if sanitize_thoughts:
+        return _sanitized_content_to_text(content)
     if content is None:
         return ""
     if isinstance(content, str):
@@ -149,6 +174,29 @@ def _content_to_text(content: Any) -> str:
     if isinstance(content, dict) and content.get("type") == "text":
         return str(content.get("text", ""))
     return str(content)
+
+
+def _sanitized_content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return visible_text_for_history(content)
+    sanitizer = ThoughtSanitizer()
+    if isinstance(content, list):
+        outputs: list[str] = []
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            piece = sanitizer.feed(str(block.get("text", "")))
+            if piece:
+                outputs.append(piece)
+        tail = sanitizer.finish()
+        if tail:
+            outputs.append(tail)
+        return visible_text_for_history("\n".join(outputs))
+    if isinstance(content, dict) and content.get("type") == "text":
+        return visible_text_for_history(str(content.get("text", "")))
+    return visible_text_for_history(str(content))
 
 
 def _extract_message_content(choice: dict[str, Any]) -> str:

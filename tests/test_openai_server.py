@@ -111,6 +111,385 @@ def test_chat_completion_pass_through():
     assert CAPTURED["body"]["max_tokens"] == 32
 
 
+def test_chat_completion_strips_channel_thoughts_from_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-thought",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": (
+                                    "<|channel>thought\nsecret\n<channel|>"
+                                    "<|channel>final\nFinal answer"
+                                ),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={"model": "gemma-4-31b-mtp", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["choices"][0]["message"]["content"] == "Final answer"
+    assert "secret" not in str(body)
+    assert "<|channel>" not in str(body)
+
+
+def test_chat_completion_drops_reasoning_content_and_logprobs_from_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-thought",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "reasoning_content": "<think>secret</think>",
+                            "message": {
+                                "role": "assistant",
+                                "content": "Final answer",
+                                "reasoning_content": "<think>secret</think>",
+                            },
+                            "logprobs": {
+                                "content": [
+                                    {"token": "<think>secret</think>"},
+                                ],
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={"model": "gemma-4-31b-mtp", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["choices"][0]["message"]["content"] == "Final answer"
+    assert "reasoning_content" not in str(body)
+    assert "logprobs" not in str(body)
+    assert "secret" not in str(body)
+
+
+def test_chat_completion_strips_text_block_thoughts_from_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-thought",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "<think>secret</think>Final answer",
+                                        "reasoning_content": "<think>secret</think>",
+                                        "logprobs": {
+                                            "content": [
+                                                {"token": "<think>secret</think>"},
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 3, "total_tokens": 4},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={"model": "gemma-4-31b-mtp", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["choices"][0]["message"]["content"] == [
+        {"type": "text", "text": "Final answer"}
+    ]
+    assert "reasoning_content" not in str(body)
+    assert "logprobs" not in str(body)
+    assert "secret" not in str(body)
+
+
+def test_chat_completion_strips_assistant_thoughts_from_forwarded_history():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-abc",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "<think>secret</think>Visible answer",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["messages"][1]["content"] == "Visible answer"
+    assert "secret" not in json.dumps(captured["body"])
+
+
+def test_chat_completion_drops_assistant_reasoning_fields_from_forwarded_history():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-abc",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "Visible answer",
+                    "reasoning_content": "<think>secret</think>",
+                    "logprobs": {"content": [{"token": "<think>secret</think>"}]},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["messages"] == [
+        {"role": "assistant", "content": "Visible answer"}
+    ]
+    assert "secret" not in json.dumps(captured["body"])
+
+
+def test_chat_completion_strips_assistant_thoughts_split_across_content_blocks():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-abc",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "<think>"},
+                        {"type": "text", "text": "secret</think>Visible"},
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "text", "text": ""},
+        {"type": "text", "text": "Visible"},
+    ]
+    assert "secret" not in json.dumps(captured["body"])
+
+
+def test_chat_completion_drops_assistant_text_block_reasoning_fields():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-abc",
+                    "object": "chat.completion",
+                    "model": "gemma-4-31b-mtp",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hi"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Visible",
+                            "reasoning_content": "<think>secret</think>",
+                            "logprobs": {
+                                "content": [{"token": "<think>secret</think>"}],
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["messages"][0]["content"] == [
+        {"type": "text", "text": "Visible"}
+    ]
+    assert "secret" not in json.dumps(captured["body"])
+
+
 def test_chat_completion_redacts_private_upstream_model_echo():
     private_alias = "/" + "home" + "/homelander/private-alias"
 
@@ -350,6 +729,220 @@ def test_chat_completion_streaming_passthrough(monkeypatch):
     assert response.headers["content-type"].startswith("text/event-stream")
     assert b"data: " in response.content
     assert b"[DONE]" in response.content
+
+
+def test_chat_completion_streaming_strips_split_thought_markers():
+    chunks_body = (
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"<|chan\"}}]}\n\n"
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"nel>thought\\nsecret\"}}]}\n\n"
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"\\n<chan\"}}]}\n\n"
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"nel|>Fi\"}}]}\n\n"
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"nal answer\"}}]}\n\n"
+        b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=chunks_body,
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+
+    text = ""
+    for line in response.content.splitlines():
+        if not line.startswith(b"data: ") or line == b"data: [DONE]":
+            continue
+        payload = json.loads(line[6:])
+        for choice in payload.get("choices") or []:
+            text += (choice.get("delta") or {}).get("content") or ""
+
+    assert response.status_code == 200
+    assert text == "Final answer"
+    assert b"secret" not in response.content
+    assert b"<|channel>" not in response.content
+
+
+def test_chat_completion_streaming_drops_reasoning_content_and_logprobs():
+    chunks_body = (
+        b"data: {\"choices\":[{\"index\":0,\"delta\":{"
+        b"\"reasoning_content\":\"<think>secret</think>\","
+        b"\"content\":\"Final answer\"},"
+        b"\"reasoning_content\":\"<think>secret</think>\","
+        b"\"logprobs\":{\"content\":[{\"token\":\"<think>secret</think>\"}]}}]}\n\n"
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=chunks_body,
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"Final answer" in response.content
+    assert b"reasoning_content" not in response.content
+    assert b"logprobs" not in response.content
+    assert b"secret" not in response.content
+
+
+def test_chat_completion_streaming_flushes_visible_tail_with_finish_reason():
+    chunks_body = (
+        b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Visible <thi\"}}]}\n\n"
+        b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=chunks_body,
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+
+    payloads = [
+        json.loads(line[6:])
+        for line in response.content.splitlines()
+        if line.startswith(b"data: ") and line != b"data: [DONE]"
+    ]
+    text = "".join(
+        (choice.get("delta") or {}).get("content") or ""
+        for payload in payloads
+        for choice in payload.get("choices") or []
+    )
+    finish_payload_index = next(
+        index
+        for index, payload in enumerate(payloads)
+        if any(choice.get("finish_reason") for choice in payload.get("choices") or [])
+    )
+
+    assert response.status_code == 200
+    assert text == "Visible <thi"
+    assert payloads[finish_payload_index]["choices"][0]["delta"]["content"] == "<thi"
+    assert not any(
+        (choice.get("delta") or {}).get("content")
+        for payload in payloads[finish_payload_index + 1:]
+        for choice in payload.get("choices") or []
+    )
+
+
+def test_chat_completion_streaming_keeps_choice_sanitizer_state_isolated():
+    chunks_body = (
+        b"data: {\"choices\":["
+        b"{\"index\":0,\"delta\":{\"content\":\"<|channel>thought\\nsecret0\"}},"
+        b"{\"index\":1,\"delta\":{\"content\":\"<|channel>thought\\nsecret1\"}}"
+        b"]}\n\n"
+        b"data: {\"choices\":["
+        b"{\"index\":0,\"delta\":{\"content\":\"\\n<channel|>Choice 0\"}},"
+        b"{\"index\":1,\"delta\":{\"content\":\" more secret1\"}}"
+        b"]}\n\n"
+        b"data: {\"choices\":["
+        b"{\"index\":1,\"delta\":{\"content\":\"\\n<channel|>Choice 1\"}}"
+        b"]}\n\n"
+        b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=chunks_body,
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = TestClient(
+        create_app(
+            api_key="secret",
+            vllm_base_url="http://vllm.local:8000",
+            vllm_transport=httpx.MockTransport(handler),
+        )
+    )
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"x-api-key": "secret", "content-type": "application/json"},
+        json={
+            "model": "gemma-4-31b-mtp",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "n": 2,
+        },
+    )
+
+    text_by_index: dict[int, str] = {}
+    for line in response.content.splitlines():
+        if not line.startswith(b"data: ") or line == b"data: [DONE]":
+            continue
+        payload = json.loads(line[6:])
+        for choice in payload.get("choices") or []:
+            index = choice.get("index", 0)
+            text_by_index[index] = (
+                text_by_index.get(index, "")
+                + ((choice.get("delta") or {}).get("content") or "")
+            )
+
+    assert response.status_code == 200
+    assert text_by_index == {0: "Choice 0", 1: "Choice 1"}
+    assert b"secret" not in response.content
 
 
 def test_chat_completion_streaming_releases_request_slot_after_consumption():

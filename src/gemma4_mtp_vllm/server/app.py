@@ -18,6 +18,10 @@ from gemma4_mtp_vllm.anthropic_adapter import (
     openai_stream_to_anthropic_events,
 )
 from gemma4_mtp_vllm.backend.vllm_client import VllmClient, VllmHttpError
+from gemma4_mtp_vllm.backend.response_parser import (
+    ThoughtSanitizer,
+    visible_text_for_history,
+)
 from gemma4_mtp_vllm.mtp_metrics import mtp_metric_delta
 from gemma4_mtp_vllm.policy import (
     UnsupportedFeature,
@@ -142,6 +146,7 @@ def _prepare_openai_body(
     upstream_model: str,
 ) -> dict[str, Any]:
     body = dict(payload)
+    body["messages"] = _sanitize_openai_messages(body.get("messages"))
     body["model"] = upstream_model
     requested_max = body.get("max_tokens", limits.max_output_tokens)
     if not isinstance(requested_max, int) or requested_max <= 0:
@@ -160,7 +165,134 @@ def _prepare_openai_body(
 
 
 def _redact_openai_response(response: dict[str, Any]) -> dict[str, Any]:
-    return redact_public_value(response)
+    return redact_public_value(_sanitize_openai_response(response))
+
+
+def _drop_openai_reasoning_fields(value: dict[str, Any]) -> None:
+    value.pop("reasoning_content", None)
+    value.pop("logprobs", None)
+
+
+def _sanitize_openai_messages(value: Any) -> Any:
+    if not isinstance(value, list):
+        return value
+    messages: list[Any] = []
+    for message in value:
+        if not isinstance(message, dict):
+            messages.append(message)
+            continue
+        copied = dict(message)
+        if copied.get("role") == "assistant":
+            _drop_openai_reasoning_fields(copied)
+            copied["content"] = _sanitize_openai_content(copied.get("content"))
+        messages.append(copied)
+    return messages
+
+
+def _sanitize_openai_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return visible_text_for_history(content)
+    if isinstance(content, list):
+        sanitizer = ThoughtSanitizer()
+        sanitized_blocks: list[Any] = []
+        for block in content:
+            if not isinstance(block, dict):
+                sanitized_blocks.append(block)
+                continue
+            copied = dict(block)
+            _drop_openai_reasoning_fields(copied)
+            if copied.get("type") == "text" and isinstance(copied.get("text"), str):
+                copied["text"] = sanitizer.feed(copied["text"])
+            sanitized_blocks.append(copied)
+        tail = sanitizer.finish()
+        if tail:
+            for block in reversed(sanitized_blocks):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    block["text"] = f"{block.get('text', '')}{tail}"
+                    break
+        return sanitized_blocks
+    return content
+
+
+def _sanitize_openai_response(response: dict[str, Any]) -> dict[str, Any]:
+    result = dict(response)
+    choices = response.get("choices")
+    if not isinstance(choices, list):
+        return result
+    sanitized_choices: list[Any] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            sanitized_choices.append(choice)
+            continue
+        copied_choice = dict(choice)
+        _drop_openai_reasoning_fields(copied_choice)
+        message = copied_choice.get("message")
+        if isinstance(message, dict):
+            copied_message = dict(message)
+            _drop_openai_reasoning_fields(copied_message)
+            if "content" in copied_message:
+                copied_message["content"] = _sanitize_openai_content(
+                    copied_message.get("content")
+                )
+            copied_choice["message"] = copied_message
+        if isinstance(copied_choice.get("text"), str):
+            copied_choice["text"] = visible_text_for_history(copied_choice["text"])
+        sanitized_choices.append(copied_choice)
+    result["choices"] = sanitized_choices
+    return result
+
+
+def _sanitize_openai_stream_chunk(
+    chunk: dict[str, Any],
+    sanitizers: dict[int, ThoughtSanitizer],
+) -> dict[str, Any]:
+    result = dict(chunk)
+    choices = chunk.get("choices")
+    if not isinstance(choices, list):
+        return result
+    sanitized_choices: list[Any] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            sanitized_choices.append(choice)
+            continue
+        copied_choice = dict(choice)
+        _drop_openai_reasoning_fields(copied_choice)
+        index = copied_choice.get("index")
+        sanitizer_index = index if isinstance(index, int) else 0
+        sanitizer = sanitizers.setdefault(sanitizer_index, ThoughtSanitizer())
+        delta = copied_choice.get("delta")
+        copied_delta: dict[str, Any] | None = None
+        if isinstance(delta, dict):
+            copied_delta = dict(delta)
+            _drop_openai_reasoning_fields(copied_delta)
+            if isinstance(copied_delta.get("content"), str):
+                content = sanitizer.feed(copied_delta["content"])
+                if content:
+                    copied_delta["content"] = content
+                else:
+                    copied_delta.pop("content", None)
+        elif copied_choice.get("finish_reason") is not None:
+            copied_delta = {}
+        if copied_choice.get("finish_reason") is not None:
+            final_content = sanitizer.finish()
+            if final_content:
+                if copied_delta is None:
+                    copied_delta = {}
+                existing_content = copied_delta.get("content")
+                copied_delta["content"] = (
+                    f"{existing_content}{final_content}"
+                    if isinstance(existing_content, str)
+                    else final_content
+                )
+        if copied_delta is not None:
+            copied_choice["delta"] = copied_delta
+        sanitized_choices.append(copied_choice)
+    result["choices"] = sanitized_choices
+    return result
+
+
+def _openai_stream_content_chunk(index: int, content: str) -> dict[str, Any]:
+    return {"choices": [{"index": index, "delta": {"content": content}}]}
 
 
 async def openai_stream_to_anthropic_events_async(
@@ -443,6 +575,7 @@ def create_app(
             except BaseException:
                 slot.release()
                 raise
+            stream_sanitizers: dict[int, ThoughtSanitizer] = {}
 
             async def event_stream():
                 start = time.perf_counter()
@@ -452,9 +585,21 @@ def create_app(
                 try:
                     async for chunk in vllm.chat_completion_stream(body):
                         if chunk.get("_done"):
+                            for index, sanitizer in stream_sanitizers.items():
+                                final_content = sanitizer.finish()
+                                if final_content:
+                                    final_chunk = _openai_stream_content_chunk(
+                                        index,
+                                        final_content,
+                                    )
+                                    delta_tokens += 1
+                                    yield (
+                                        f"data: {json.dumps(_redact_openai_response(final_chunk))}\n\n"
+                                    )
                             stream_completed = True
                             yield "data: [DONE]\n\n"
                             return
+                        chunk = _sanitize_openai_stream_chunk(chunk, stream_sanitizers)
                         usage_tokens = _stream_usage_tokens(chunk, usage_tokens)
                         if _chunk_has_content_delta(chunk):
                             delta_tokens += 1
