@@ -47,7 +47,11 @@ def _install_fake_clock(monkeypatch) -> _FakeBenchClock:
 
 def _stream_response(*, text: str) -> httpx.Response:
     chunks = "".join(
-        f'data: {{"choices":[{{"delta":{{"content":{json.dumps(char)}}}}}]}}\n\n'
+        (
+            'data: {"choices":[{"delta":'
+            f'{{"content":{json.dumps(char)},"token_ids":[{ord(char)}]}}'
+            "}]}\n\n"
+        )
         for char in text
     )
     body = (
@@ -144,6 +148,7 @@ def test_bench_command_emits_summary(monkeypatch, tmp_path):
     assert "generation_tps" not in serialized
     assert captured_bodies
     assert all(request_body["stream"] is True for request_body in captured_bodies)
+    assert all(request_body["return_token_ids"] is True for request_body in captured_bodies)
     assert all(request_body["min_tokens"] == 8 for request_body in captured_bodies)
     assert all(request_body["max_tokens"] == 8 for request_body in captured_bodies)
     assert all(request_body["ignore_eos"] is True for request_body in captured_bodies)
@@ -245,7 +250,7 @@ def test_measure_does_not_invent_token_latency_for_multi_token_chunks(monkeypatc
 
     assert text == "abcdefgh"
     assert result.e2e_output_tokens_per_second == 10.0
-    assert result.ttft_ms is not None
+    assert result.ttft_ms is None
     assert result.tpot_ms is None
     assert result.inter_token_latency_ms_p50 is None
     assert result.inter_token_latency_ms_p95 is None
@@ -342,6 +347,97 @@ def test_measure_uses_tokenizer_count_without_inventing_token_latency(monkeypatc
     assert result.tpot_ms is None
     assert result.inter_token_latency_ms_p50 is None
     assert result.inter_token_latency_ms_p95 is None
+
+
+def test_measure_uses_streamed_token_ids_for_tpot_and_raw_parity(monkeypatch):
+    times = [0.0, 0.0, 0.1, 0.2, 0.8]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"reasoning":"think",'
+            '"token_ids":[10,11]}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"ok",'
+            '"token_ids":[12,13]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli.time.perf_counter",
+        lambda: times.pop(0) if times else 0.8,
+    )
+
+    text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+        )
+    )
+
+    assert text == "ok"
+    assert result.reasoning_text == "think"
+    assert result.raw_output_token_ids == [10, 11, 12, 13]
+    assert result.timing_evidence_valid is True
+    assert result.token_count_validation_status == "matched"
+    assert result.ttft_ms == pytest.approx(100.0)
+    assert result.tpot_ms == pytest.approx((0.2 - 0.1) * 1000.0 / 3)
+    assert result.itl_basis == "chunk_arrival"
+    assert result.inter_token_latency_ms_p50 is None
+
+
+def test_measure_marks_timing_invalid_when_raw_token_count_mismatches_usage(
+    monkeypatch,
+):
+    times = [0.0, 0.0, 0.1, 0.8]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok","token_ids":[12,13]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":3,"total_tokens":6}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli.time.perf_counter",
+        lambda: times.pop(0) if times else 0.8,
+    )
+
+    _text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+        )
+    )
+
+    assert result.raw_output_token_ids == [12, 13]
+    assert result.completion_tokens == 3
+    assert result.timing_evidence_valid is False
+    assert result.token_count_validation_status == "usage_mismatch"
+    assert result.ttft_ms is None
+    assert result.tpot_ms is None
+    assert result.raw_stream_chunks
 
 
 def test_measure_tokenizer_fallback_uses_visible_text_not_chat_template(monkeypatch):
@@ -663,7 +759,7 @@ def test_bench_single_records_runtime_endpoint_evidence(monkeypatch, tmp_path):
     assert observation["result"]["e2e_output_tokens_per_second"] == 20.0
     assert observation["output_sha256"]
     assert observation["output_token_ids"] == [ord(char) for char in "response"]
-    assert observation["tokenization_status"] == "available"
+    assert observation["tokenization_status"] == "matched"
     assert observation["parity_ready"] is True
     assert observation["mtp_metrics_delta"]["state"] == "active"
     assert observation["mtp_metrics_delta"]["drafted_tokens_delta"] == 8.0
@@ -775,8 +871,18 @@ def test_bench_single_marks_parity_unready_when_tokenizer_is_unavailable(
                     "vllm:spec_decode_num_accepted_tokens_total 5\n"
                 ),
             )
-        if request.url.path == "/tokenize":
-            return httpx.Response(404, json={"error": "missing"})
+        if request.url.path == "/v1/chat/completions":
+            body = (
+                'data: {"choices":[{"delta":{"content":"response"}}]}\n\n'
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+                '"usage":{"prompt_tokens":3,"completion_tokens":8,"total_tokens":11}}\n\n'
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=body.encode(),
+            )
         return _make_handler(tps_mtp=20.0, tps_baseline=10.0, clock=clock)(request)
 
     monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
@@ -808,7 +914,7 @@ def test_bench_single_marks_parity_unready_when_tokenizer_is_unavailable(
     assert result.exit_code == 0, result.stdout
     observation = json.loads(out.read_text())["groups"][0]["observations"][0]
     assert observation["output_token_ids"] is None
-    assert observation["tokenization_status"] == "unavailable"
+    assert observation["tokenization_status"] == "raw_unavailable"
     assert observation["parity_ready"] is False
 
 
@@ -843,7 +949,7 @@ def _bench_single_compare_payload(
                     },
                     "output_token_ids": token_ids,
                     "tokenization_status": (
-                        "available" if parity_ready else "unavailable"
+                        "matched" if parity_ready else "raw_unavailable"
                     ),
                     "parity_ready": parity_ready,
                     "mtp_metrics_delta": {
@@ -927,6 +1033,10 @@ def test_bench_compare_adopts_candidate_with_complete_evidence(tmp_path):
             "--soak-error-count",
             "0",
             "--no-oom",
+            "--same-mode-mtp-parity",
+            "passed",
+            "--final-answer-quality",
+            "passed",
             "--json-output",
             str(out),
         ],
@@ -999,10 +1109,12 @@ def test_bench_compare_requires_external_runtime_evidence(tmp_path):
         "soak_seconds_missing",
         "soak_error_count_missing",
         "no_oom_not_asserted",
+        "same_mode_mtp_parity_missing",
+        "final_answer_quality_missing",
     ]
 
 
-def test_bench_compare_rejects_deterministic_parity_failure(tmp_path):
+def test_bench_compare_treats_cross_mode_parity_failure_as_diagnostic(tmp_path):
     control_json = tmp_path / "control.json"
     candidate_json = tmp_path / "candidate.json"
     control_json.write_text(
@@ -1059,13 +1171,277 @@ def test_bench_compare_rejects_deterministic_parity_failure(tmp_path):
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
-    assert payload["recommendation"]["action"] == "do_not_adopt"
-    assert payload["missing_evidence"] == []
-    assert "deterministic_parity_failed" in payload["failure_reasons"]
+    assert payload["recommendation"]["action"] == "insufficient_evidence"
+    assert "same_mode_mtp_parity_missing" in payload["missing_evidence"]
+    assert payload["failure_reasons"] == []
     assert (
         payload["group_comparisons"][0]["parity_reason"]
         == "deterministic_parity_failed"
     )
+    assert (
+        payload["group_comparisons"][0]["cross_execution_mode_parity"][
+            "deterministic_parity"
+        ]
+        is False
+    )
+
+
+def test_bench_compare_rejects_within_backend_non_repeatability(tmp_path):
+    control_json = tmp_path / "control.json"
+    candidate_json = tmp_path / "candidate.json"
+    control_payload = _bench_single_compare_payload(
+        label="eager_true",
+        profile="tp2_2x32_fp8_gpuonly",
+        e2e_values=[100.0, 102.0],
+    )
+    candidate_payload = _bench_single_compare_payload(
+        label="eager_false",
+        profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+        e2e_values=[110.0, 114.0],
+    )
+    for group in candidate_payload["groups"]:
+        group["observations"][1]["output_token_ids"] = [4, 5, 6]
+    control_json.write_text(json.dumps(control_payload), encoding="utf-8")
+    candidate_json.write_text(json.dumps(candidate_payload), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "bench-compare",
+            "--control-json",
+            str(control_json),
+            "--candidate-json",
+            str(candidate_json),
+            "--control-startup-seconds",
+            "55.0",
+            "--candidate-startup-seconds",
+            "52.0",
+            "--control-peak-gpu-memory-mib",
+            "31000",
+            "--control-peak-gpu-memory-mib",
+            "31100",
+            "--candidate-peak-gpu-memory-mib",
+            "31200",
+            "--candidate-peak-gpu-memory-mib",
+            "31300",
+            "--soak-passed",
+            "--soak-seconds",
+            "3600",
+            "--soak-error-count",
+            "0",
+            "--no-oom",
+            "--same-mode-mtp-parity",
+            "passed",
+            "--final-answer-quality",
+            "passed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["recommendation"]["action"] == "do_not_adopt"
+    assert "candidate_within_backend_repeatability_failed" in payload[
+        "failure_reasons"
+    ]
+
+
+def test_bench_compare_rejects_same_mode_mtp_parity_failure(tmp_path):
+    control_json = tmp_path / "control.json"
+    candidate_json = tmp_path / "candidate.json"
+    control_json.write_text(
+        json.dumps(
+            _bench_single_compare_payload(
+                label="eager_true",
+                profile="tp2_2x32_fp8_gpuonly",
+                e2e_values=[100.0, 102.0],
+            )
+        ),
+        encoding="utf-8",
+    )
+    candidate_json.write_text(
+        json.dumps(
+            _bench_single_compare_payload(
+                label="eager_false",
+                profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+                e2e_values=[110.0, 114.0],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "bench-compare",
+            "--control-json",
+            str(control_json),
+            "--candidate-json",
+            str(candidate_json),
+            "--control-startup-seconds",
+            "55.0",
+            "--candidate-startup-seconds",
+            "52.0",
+            "--control-peak-gpu-memory-mib",
+            "31000",
+            "--control-peak-gpu-memory-mib",
+            "31100",
+            "--candidate-peak-gpu-memory-mib",
+            "31200",
+            "--candidate-peak-gpu-memory-mib",
+            "31300",
+            "--soak-passed",
+            "--soak-seconds",
+            "3600",
+            "--soak-error-count",
+            "0",
+            "--no-oom",
+            "--same-mode-mtp-parity",
+            "failed",
+            "--final-answer-quality",
+            "passed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["recommendation"]["action"] == "do_not_adopt"
+    assert "same_mode_mtp_parity_failed" in payload["failure_reasons"]
+
+
+def test_bench_compare_acceptance_non_inferiority_margin(tmp_path):
+    control_json = tmp_path / "control.json"
+    candidate_json = tmp_path / "candidate.json"
+    control_json.write_text(
+        json.dumps(
+            _bench_single_compare_payload(
+                label="eager_true",
+                profile="tp2_2x32_fp8_gpuonly",
+                e2e_values=[100.0, 102.0],
+                acceptance_rates=[0.60, 0.60],
+                mean_acceptance_lengths=[3.0, 3.0],
+            )
+        ),
+        encoding="utf-8",
+    )
+    candidate_json.write_text(
+        json.dumps(
+            _bench_single_compare_payload(
+                label="eager_false",
+                profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+                e2e_values=[110.0, 114.0],
+                acceptance_rates=[0.595, 0.595],
+                mean_acceptance_lengths=[2.96, 2.96],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "bench-compare",
+            "--control-json",
+            str(control_json),
+            "--candidate-json",
+            str(candidate_json),
+            "--control-startup-seconds",
+            "55.0",
+            "--candidate-startup-seconds",
+            "52.0",
+            "--control-peak-gpu-memory-mib",
+            "31000",
+            "--control-peak-gpu-memory-mib",
+            "31100",
+            "--candidate-peak-gpu-memory-mib",
+            "31200",
+            "--candidate-peak-gpu-memory-mib",
+            "31300",
+            "--soak-passed",
+            "--soak-seconds",
+            "3600",
+            "--soak-error-count",
+            "0",
+            "--no-oom",
+            "--same-mode-mtp-parity",
+            "passed",
+            "--final-answer-quality",
+            "passed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["recommendation"]["action"] == "adopt_candidate"
+    assert payload["failure_reasons"] == []
+    assert (
+        payload["group_comparisons"][0]["acceptance_non_inferiority"]["status"]
+        == "passed"
+    )
+
+
+def test_bench_compare_acceptance_non_inferiority_failure(tmp_path):
+    control_json = tmp_path / "control.json"
+    candidate_json = tmp_path / "candidate.json"
+    control_json.write_text(
+        json.dumps(
+            _bench_single_compare_payload(
+                label="eager_true",
+                profile="tp2_2x32_fp8_gpuonly",
+                e2e_values=[100.0, 102.0],
+                acceptance_rates=[0.60, 0.60],
+            )
+        ),
+        encoding="utf-8",
+    )
+    candidate_json.write_text(
+        json.dumps(
+            _bench_single_compare_payload(
+                label="eager_false",
+                profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+                e2e_values=[110.0, 114.0],
+                acceptance_rates=[0.58, 0.58],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "bench-compare",
+            "--control-json",
+            str(control_json),
+            "--candidate-json",
+            str(candidate_json),
+            "--control-startup-seconds",
+            "55.0",
+            "--candidate-startup-seconds",
+            "52.0",
+            "--control-peak-gpu-memory-mib",
+            "31000",
+            "--control-peak-gpu-memory-mib",
+            "31100",
+            "--candidate-peak-gpu-memory-mib",
+            "31200",
+            "--candidate-peak-gpu-memory-mib",
+            "31300",
+            "--soak-passed",
+            "--soak-seconds",
+            "3600",
+            "--soak-error-count",
+            "0",
+            "--no-oom",
+            "--same-mode-mtp-parity",
+            "passed",
+            "--final-answer-quality",
+            "passed",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["recommendation"]["action"] == "do_not_adopt"
+    assert "mtp_acceptance_regression" in payload["failure_reasons"]
 
 
 def test_bench_compare_rejects_incomplete_target_matrix(tmp_path):
@@ -1187,7 +1563,7 @@ def test_bench_compare_rejects_request_body_and_timing_evidence_gaps(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["recommendation"]["action"] == "do_not_adopt"
     assert "request_body_mismatch" in payload["failure_reasons"]
-    assert "tpot_evidence_missing" in payload["failure_reasons"]
+    assert "tpot_evidence_missing" in payload["missing_evidence"]
 
 
 def test_bench_compare_rejects_invalid_external_evidence(tmp_path):

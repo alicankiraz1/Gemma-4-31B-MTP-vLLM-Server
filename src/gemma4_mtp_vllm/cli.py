@@ -55,6 +55,8 @@ P1_001_CANDIDATE_PROFILE = "tp2_2x32_fp8_gpuonly_cuda_graph"
 P1_001_REQUIRED_OUTPUT_TOKEN_TARGETS = (64, 256, 512, 1024)
 P1_001_EXPECTED_GPU_COUNT = 2
 P1_001_MIN_SOAK_SECONDS = 3600.0
+P1_001_ACCEPTANCE_RATE_MARGIN = -0.01
+P1_001_MEAN_ACCEPTANCE_LENGTH_MARGIN = -0.05
 
 
 def _profile_set() -> ProfileSet:
@@ -90,6 +92,7 @@ def _request_body(
         "top_p": top_p,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "return_token_ids": True,
     }
     if seed is not None:
         body["seed"] = seed
@@ -117,8 +120,12 @@ async def _measure(
 ) -> tuple[str, BenchmarkEndpointResult]:
     async with _http_client(base_url) as http:
         start = time.perf_counter()
-        token_times: list[float] = []
+        generated_token_chunk_times: list[float] = []
+        stream_chunk_times: list[float] = []
+        raw_output_token_ids: list[int] = []
         output_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        raw_stream_chunks: list[dict[str, object]] = []
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
         async with http.stream("POST", "/v1/chat/completions", json=body) as response:
@@ -130,34 +137,64 @@ async def _measure(
                 if raw == "[DONE]":
                     break
                 payload = json.loads(raw)
+                raw_stream_chunks.append(payload)
+                chunk_token_ids = _stream_chunk_token_ids(payload)
+                chunk_reasoning_parts: list[str] = []
+                chunk_content_parts: list[str] = []
                 usage = payload.get("usage") or {}
                 if usage:
                     prompt_tokens = int(usage.get("prompt_tokens") or 0)
                     completion_tokens = int(usage.get("completion_tokens") or 0)
                 for choice in payload.get("choices") or []:
                     delta = choice.get("delta") or {}
+                    reasoning = delta.get("reasoning")
+                    if reasoning is None:
+                        reasoning = delta.get("reasoning_content")
+                    if reasoning:
+                        chunk_reasoning_parts.append(str(reasoning))
                     content = delta.get("content")
                     if content:
-                        token_times.append(time.perf_counter())
-                        output_parts.append(str(content))
+                        chunk_content_parts.append(str(content))
+                if chunk_token_ids or chunk_reasoning_parts or chunk_content_parts:
+                    chunk_time = time.perf_counter()
+                    if chunk_token_ids:
+                        raw_output_token_ids.extend(chunk_token_ids)
+                        generated_token_chunk_times.append(chunk_time)
+                    stream_chunk_times.append(chunk_time)
+                    reasoning_parts.extend(chunk_reasoning_parts)
+                    output_parts.extend(chunk_content_parts)
         end = time.perf_counter()
     text = "".join(output_parts)
-    if completion_tokens is None and text:
+    reasoning_text = "".join(reasoning_parts)
+    if not raw_output_token_ids and completion_tokens is None and text:
         completion_tokens = await _count_output_tokens(base_url, text)
     observed_completion_tokens = completion_tokens
+    token_count_status = "raw_token_ids_missing"
+    timing_evidence_valid = False
+    if raw_output_token_ids:
+        raw_count = len(raw_output_token_ids)
+        if completion_tokens is None:
+            token_count_status = "usage_missing"
+            observed_completion_tokens = raw_count
+        elif completion_tokens == raw_count:
+            token_count_status = "matched"
+            timing_evidence_valid = True
+            observed_completion_tokens = raw_count
+        else:
+            token_count_status = "usage_mismatch"
+            observed_completion_tokens = completion_tokens
     total_latency_ms = (end - start) * 1000.0
-    ttft_ms = (token_times[0] - start) * 1000.0 if token_times else None
-    token_timing_complete = (
-        observed_completion_tokens is not None
-        and observed_completion_tokens > 0
-        and len(token_times) == observed_completion_tokens
+    ttft_ms = (
+        (generated_token_chunk_times[0] - start) * 1000.0
+        if timing_evidence_valid and generated_token_chunk_times
+        else None
     )
-    intervals_ms = (
+    chunk_intervals_ms = (
         [
             (right - left) * 1000.0
-            for left, right in zip(token_times, token_times[1:])
+            for left, right in zip(stream_chunk_times, stream_chunk_times[1:])
         ]
-        if token_timing_complete
+        if len(stream_chunk_times) > 1
         else []
     )
     elapsed_seconds = max(end - start, 0.0)
@@ -172,21 +209,72 @@ async def _measure(
         e2e_output_tokens_per_second=throughput,
         ttft_ms=ttft_ms,
         tpot_ms=(
-            ((token_times[-1] - token_times[0]) * 1000.0)
-            / (observed_completion_tokens - 1)
-            if token_timing_complete
+            ((generated_token_chunk_times[-1] - generated_token_chunk_times[0]) * 1000.0)
+            / (len(raw_output_token_ids) - 1)
+            if timing_evidence_valid
             and ttft_ms is not None
-            and observed_completion_tokens is not None
-            and observed_completion_tokens > 1
+            and len(raw_output_token_ids) > 1
             else None
         ),
-        inter_token_latency_ms_p50=percentile(intervals_ms, 50),
-        inter_token_latency_ms_p95=percentile(intervals_ms, 95),
+        inter_token_latency_ms_p50=None,
+        inter_token_latency_ms_p95=None,
         total_latency_ms=total_latency_ms,
         prompt_tokens=prompt_tokens,
         completion_tokens=observed_completion_tokens,
+        raw_output_token_ids=raw_output_token_ids or None,
+        reasoning_text=reasoning_text,
+        visible_content=text,
+        token_timing_basis=(
+            "raw_token_ids_chunk_arrival" if raw_output_token_ids else "unavailable"
+        ),
+        tpot_basis=(
+            "approximate_chunk_arrival"
+            if timing_evidence_valid and len(raw_output_token_ids) > 1
+            else "unavailable"
+        ),
+        itl_basis=(
+            "chunk_arrival"
+            if timing_evidence_valid and len(raw_output_token_ids) > 1
+            else "unavailable"
+        ),
+        stream_chunk_interval_ms_p50=percentile(chunk_intervals_ms, 50),
+        stream_chunk_interval_ms_p95=percentile(chunk_intervals_ms, 95),
+        timing_evidence_valid=timing_evidence_valid,
+        token_count_validation_status=token_count_status,
+        raw_stream_chunks=raw_stream_chunks,
     )
     return text, result
+
+
+def _coerce_token_ids(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    tokens: list[int] = []
+    for item in value:
+        if isinstance(item, int) and not isinstance(item, bool):
+            tokens.append(item)
+    return tokens
+
+
+def _stream_chunk_token_ids(payload: dict[str, object]) -> list[int]:
+    tokens: list[int] = []
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                direct = _coerce_token_ids(delta.get("token_ids"))
+                if direct:
+                    tokens.extend(direct)
+                    continue
+                tokens.extend(_coerce_token_ids(delta.get("reasoning_token_ids")))
+                tokens.extend(_coerce_token_ids(delta.get("content_token_ids")))
+            tokens.extend(_coerce_token_ids(choice.get("token_ids")))
+    if not tokens:
+        tokens.extend(_coerce_token_ids(payload.get("token_ids")))
+    return tokens
 
 
 async def _fetch_mtp_metrics(base_url: str) -> dict:
@@ -676,6 +764,8 @@ def bench_compare(
     soak_seconds: Optional[float] = typer.Option(None, "--soak-seconds"),
     soak_error_count: Optional[int] = typer.Option(None, "--soak-error-count"),
     no_oom: bool = typer.Option(False, "--no-oom"),
+    same_mode_mtp_parity: str = typer.Option("missing", "--same-mode-mtp-parity"),
+    final_answer_quality: str = typer.Option("missing", "--final-answer-quality"),
     json_output: Optional[Path] = typer.Option(None, "--json-output"),
 ) -> None:
     """Compare sequential bench-single outputs for an evidence-gated A/B."""
@@ -696,6 +786,8 @@ def bench_compare(
         soak_seconds=soak_seconds,
         soak_error_count=soak_error_count,
         no_oom=no_oom,
+        same_mode_mtp_parity=same_mode_mtp_parity,
+        final_answer_quality=final_answer_quality,
     )
     rendered = json.dumps(payload, indent=2, allow_nan=False)
     if json_output is not None:
@@ -755,6 +847,8 @@ def _compare_single_endpoint_benchmarks(
     soak_seconds: float | None,
     soak_error_count: int | None,
     no_oom: bool,
+    same_mode_mtp_parity: str,
+    final_answer_quality: str,
 ) -> dict[str, object]:
     failure_reasons: list[str] = []
     missing_evidence: list[str] = []
@@ -804,6 +898,7 @@ def _compare_single_endpoint_benchmarks(
         )
         group_reports.append(report)
         failure_reasons.extend(str(reason) for reason in report["failure_reasons"])
+        missing_evidence.extend(str(item) for item in report["missing_evidence"])
     if control_groups and candidate_groups and not group_reports:
         failure_reasons.append("no_comparable_groups")
 
@@ -842,6 +937,22 @@ def _compare_single_endpoint_benchmarks(
     )
     if not no_oom:
         missing_evidence.append("no_oom_not_asserted")
+    _validate_gate_state(
+        same_mode_mtp_parity,
+        failed_reason="same_mode_mtp_parity_failed",
+        missing_reason="same_mode_mtp_parity_missing",
+        invalid_reason="same_mode_mtp_parity_invalid",
+        missing_evidence=missing_evidence,
+        failure_reasons=failure_reasons,
+    )
+    _validate_gate_state(
+        final_answer_quality,
+        failed_reason="final_answer_quality_failed",
+        missing_reason="final_answer_quality_missing",
+        invalid_reason="final_answer_quality_invalid",
+        missing_evidence=missing_evidence,
+        failure_reasons=failure_reasons,
+    )
 
     if failure_reasons:
         action = "do_not_adopt"
@@ -876,6 +987,8 @@ def _compare_single_endpoint_benchmarks(
             "error_count": soak_error_count,
         },
         "no_oom": no_oom,
+        "same_mode_mtp_parity": same_mode_mtp_parity,
+        "final_answer_quality": final_answer_quality,
         "failure_reasons": _dedupe(failure_reasons),
         "missing_evidence": _dedupe(missing_evidence),
         "recommendation": {
@@ -1035,6 +1148,27 @@ def _validate_soak_evidence(
         failure_reasons.append("one_hour_soak_errors_observed")
 
 
+def _validate_gate_state(
+    value: str,
+    *,
+    failed_reason: str,
+    missing_reason: str,
+    invalid_reason: str,
+    missing_evidence: list[str],
+    failure_reasons: list[str],
+) -> None:
+    normalized = value.strip().lower()
+    if normalized == "passed":
+        return
+    if normalized == "missing":
+        missing_evidence.append(missing_reason)
+        return
+    if normalized == "failed":
+        failure_reasons.append(failed_reason)
+        return
+    failure_reasons.append(invalid_reason)
+
+
 def _compare_single_endpoint_group(
     *,
     control_group: dict[str, object],
@@ -1042,6 +1176,7 @@ def _compare_single_endpoint_group(
     min_meaningful_speedup: float,
 ) -> dict[str, object]:
     failure_reasons: list[str] = []
+    missing_evidence: list[str] = []
     failure_reasons.extend(_request_body_failure_reasons(control_group, candidate_group))
 
     control_e2e = _group_metric_median(
@@ -1061,50 +1196,49 @@ def _compare_single_endpoint_group(
     if not _metric_summary_has_median(control_ttft) or not _metric_summary_has_median(
         candidate_ttft
     ):
-        failure_reasons.append("ttft_evidence_missing")
+        missing_evidence.append("ttft_evidence_missing")
 
     control_tpot = _group_metric_summary(control_group, "tpot_ms")
     candidate_tpot = _group_metric_summary(candidate_group, "tpot_ms")
     if not _metric_summary_has_median(control_tpot) or not _metric_summary_has_median(
         candidate_tpot
     ):
-        failure_reasons.append("tpot_evidence_missing")
+        missing_evidence.append("tpot_evidence_missing")
 
-    control_acceptance_rate = metric_summary(
-        _group_mtp_delta_values(control_group, "acceptance_rate_delta")
+    acceptance_rate = _non_inferiority_report(
+        control_group,
+        candidate_group,
+        metric_name="acceptance_rate_delta",
+        margin=P1_001_ACCEPTANCE_RATE_MARGIN,
     )
-    candidate_acceptance_rate = metric_summary(
-        _group_mtp_delta_values(candidate_group, "acceptance_rate_delta")
-    )
-    control_acceptance_rate_median = control_acceptance_rate["median"]
-    candidate_acceptance_rate_median = candidate_acceptance_rate["median"]
-    if not isinstance(control_acceptance_rate_median, (int, float)) or not isinstance(
-        candidate_acceptance_rate_median,
-        (int, float),
-    ):
-        failure_reasons.append("mtp_acceptance_evidence_missing")
-    elif candidate_acceptance_rate_median < control_acceptance_rate_median:
+    if acceptance_rate["status"] == "missing":
+        missing_evidence.append("mtp_acceptance_evidence_missing")
+    elif acceptance_rate["status"] == "failed":
         failure_reasons.append("mtp_acceptance_regression")
 
-    control_acceptance_length = metric_summary(
-        _group_mtp_delta_values(control_group, "mean_acceptance_length_delta")
+    acceptance_length = _non_inferiority_report(
+        control_group,
+        candidate_group,
+        metric_name="mean_acceptance_length_delta",
+        margin=P1_001_MEAN_ACCEPTANCE_LENGTH_MARGIN,
     )
-    candidate_acceptance_length = metric_summary(
-        _group_mtp_delta_values(candidate_group, "mean_acceptance_length_delta")
-    )
-    control_acceptance_length_median = control_acceptance_length["median"]
-    candidate_acceptance_length_median = candidate_acceptance_length["median"]
-    if not isinstance(
-        control_acceptance_length_median,
-        (int, float),
-    ) or not isinstance(candidate_acceptance_length_median, (int, float)):
-        failure_reasons.append("mtp_mean_acceptance_length_evidence_missing")
-    elif candidate_acceptance_length_median < control_acceptance_length_median:
+    if acceptance_length["status"] == "missing":
+        missing_evidence.append("mtp_mean_acceptance_length_evidence_missing")
+    elif acceptance_length["status"] == "failed":
         failure_reasons.append("mtp_mean_acceptance_length_regression")
 
-    parity = _group_token_parity(control_group, candidate_group)
-    if not parity["deterministic_parity"]:
-        failure_reasons.append(str(parity["reason"]))
+    control_repeatability = _group_within_backend_repeatability(control_group)
+    candidate_repeatability = _group_within_backend_repeatability(candidate_group)
+    if control_repeatability["status"] == "missing":
+        missing_evidence.append("control_raw_token_evidence_missing")
+    elif control_repeatability["status"] == "failed":
+        failure_reasons.append("control_within_backend_repeatability_failed")
+    if candidate_repeatability["status"] == "missing":
+        missing_evidence.append("candidate_raw_token_evidence_missing")
+    elif candidate_repeatability["status"] == "failed":
+        failure_reasons.append("candidate_within_backend_repeatability_failed")
+
+    cross_parity = _group_token_parity(control_group, candidate_group)
 
     return {
         "prompt_name": control_group.get("prompt_name"),
@@ -1113,20 +1247,34 @@ def _compare_single_endpoint_group(
             "e2e_output_tokens_per_second_median": control_e2e,
             "ttft_ms": control_ttft,
             "tpot_ms": control_tpot,
-            "mtp_acceptance_rate": control_acceptance_rate,
-            "mtp_mean_acceptance_length": control_acceptance_length,
+            "mtp_acceptance_rate": acceptance_rate["control"],
+            "mtp_mean_acceptance_length": acceptance_length["control"],
+            "within_backend_repeatability": control_repeatability,
         },
         "candidate": {
             "e2e_output_tokens_per_second_median": candidate_e2e,
             "ttft_ms": candidate_ttft,
             "tpot_ms": candidate_tpot,
-            "mtp_acceptance_rate": candidate_acceptance_rate,
-            "mtp_mean_acceptance_length": candidate_acceptance_length,
+            "mtp_acceptance_rate": acceptance_rate["candidate"],
+            "mtp_mean_acceptance_length": acceptance_length["candidate"],
+            "within_backend_repeatability": candidate_repeatability,
         },
         "e2e_speedup": e2e_speedup,
-        "deterministic_parity": parity["deterministic_parity"],
-        "parity_reason": parity["reason"],
+        "within_backend_repeatability": {
+            "control": control_repeatability,
+            "candidate": candidate_repeatability,
+        },
+        "same_execution_mode_mtp_parity": {
+            "status": "not_measured",
+            "reason": "requires no-MTP baseline for the same execution mode",
+        },
+        "cross_execution_mode_parity": cross_parity,
+        "deterministic_parity": cross_parity["deterministic_parity"],
+        "parity_reason": cross_parity["reason"],
+        "acceptance_non_inferiority": acceptance_rate,
+        "mean_acceptance_length_non_inferiority": acceptance_length,
         "failure_reasons": _dedupe(failure_reasons),
+        "missing_evidence": _dedupe(missing_evidence),
     }
 
 
@@ -1141,6 +1289,123 @@ def _request_body_failure_reasons(
     if control_body != candidate_body:
         return ["request_body_mismatch"]
     return []
+
+
+def _non_inferiority_report(
+    control_group: dict[str, object],
+    candidate_group: dict[str, object],
+    *,
+    metric_name: str,
+    margin: float,
+) -> dict[str, object]:
+    control_values = _group_mtp_delta_values(control_group, metric_name)
+    candidate_values = _group_mtp_delta_values(candidate_group, metric_name)
+    control_clean = _finite_values(control_values)
+    candidate_clean = _finite_values(candidate_values)
+    control_summary = metric_summary(control_clean)
+    candidate_summary = metric_summary(candidate_clean)
+    paired_diffs = [
+        candidate - control
+        for control, candidate in zip(control_values, candidate_values)
+        if isinstance(control, (int, float))
+        and isinstance(candidate, (int, float))
+        and math.isfinite(float(control))
+        and math.isfinite(float(candidate))
+    ]
+    diff_summary = metric_summary(paired_diffs)
+    ci = diff_summary.get("bootstrap_ci_95")
+    ci_low = ci.get("low") if isinstance(ci, dict) else None
+    if not paired_diffs or not isinstance(ci_low, (int, float)):
+        status = "missing"
+    elif float(ci_low) < margin:
+        status = "failed"
+    else:
+        status = "passed"
+    return {
+        "metric": metric_name,
+        "status": status,
+        "margin": margin,
+        "control": control_summary,
+        "candidate": candidate_summary,
+        "candidate_minus_control": diff_summary,
+    }
+
+
+def _finite_values(values: list[float | None]) -> list[float]:
+    return [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+
+
+def _group_within_backend_repeatability(group: dict[str, object]) -> dict[str, object]:
+    observations = _group_observations(group)
+    sequences: list[list[int]] = []
+    for observation in observations:
+        if not observation.get("parity_ready"):
+            return {
+                "status": "missing",
+                "reason": "raw_token_evidence_unavailable",
+                "observation_count": len(observations),
+            }
+        tokens = observation.get("output_token_ids")
+        if not _is_token_id_sequence(tokens):
+            return {
+                "status": "missing",
+                "reason": "raw_token_ids_missing",
+                "observation_count": len(observations),
+            }
+        sequences.append(list(tokens))
+    if not sequences:
+        return {"status": "missing", "reason": "observations_missing"}
+    unique = {_token_sequence_hash(sequence) for sequence in sequences}
+    return {
+        "status": "passed" if len(unique) == 1 else "failed",
+        "observation_count": len(sequences),
+        "unique_sequence_count": len(unique),
+        "unique_sequence_hashes": sorted(unique),
+        "sequence_lengths": [len(sequence) for sequence in sequences],
+    }
+
+
+def _is_token_id_sequence(value: object) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(item, int) and not isinstance(item, bool) for item in value
+    )
+
+
+def _token_sequence_hash(tokens: list[int]) -> str:
+    return hashlib.sha256(
+        json.dumps(tokens, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _token_sequence_diagnostics(
+    control_tokens: list[int],
+    candidate_tokens: list[int],
+) -> dict[str, object]:
+    max_len = max(len(control_tokens), len(candidate_tokens))
+    lcp = 0
+    for left, right in zip(control_tokens, candidate_tokens):
+        if left != right:
+            break
+        lcp += 1
+    same_position = sum(
+        1 for left, right in zip(control_tokens, candidate_tokens) if left == right
+    )
+    exact = control_tokens == candidate_tokens
+    return {
+        "exact_match": exact,
+        "control_length": len(control_tokens),
+        "candidate_length": len(candidate_tokens),
+        "output_length_equal": len(control_tokens) == len(candidate_tokens),
+        "longest_common_prefix_tokens": lcp,
+        "first_divergence_position_0_based": None if exact else lcp,
+        "matching_token_percentage_same_position_over_max_len": (
+            same_position / max_len if max_len else 1.0
+        ),
+    }
 
 
 def _group_metric_median(group: dict[str, object], metric_name: str) -> float | None:
@@ -1192,6 +1457,7 @@ def _group_token_parity(
     candidate_observations = _group_observations(candidate_group)
     if len(control_observations) != len(candidate_observations):
         return {"deterministic_parity": False, "reason": "observation_count_mismatch"}
+    diagnostics: list[dict[str, object]] = []
     for control_observation, candidate_observation in zip(
         control_observations,
         candidate_observations,
@@ -1200,14 +1466,29 @@ def _group_token_parity(
             "parity_ready"
         ):
             return {"deterministic_parity": False, "reason": "token_parity_unavailable"}
-        if control_observation.get("output_token_ids") != candidate_observation.get(
-            "output_token_ids"
+        control_tokens = control_observation.get("output_token_ids")
+        candidate_tokens = candidate_observation.get("output_token_ids")
+        if not _is_token_id_sequence(control_tokens) or not _is_token_id_sequence(
+            candidate_tokens
         ):
+            return {"deterministic_parity": False, "reason": "token_parity_unavailable"}
+        diagnostic = _token_sequence_diagnostics(
+            list(control_tokens),
+            list(candidate_tokens),
+        )
+        diagnostic["index"] = control_observation.get("index")
+        diagnostics.append(diagnostic)
+        if not diagnostic["exact_match"]:
             return {
                 "deterministic_parity": False,
                 "reason": "deterministic_parity_failed",
+                "diagnostics": diagnostics,
             }
-    return {"deterministic_parity": True, "reason": "token_ids_match"}
+    return {
+        "deterministic_parity": True,
+        "reason": "token_ids_match",
+        "diagnostics": diagnostics,
+    }
 
 
 def _group_observations(group: dict[str, object]) -> list[dict[str, object]]:
@@ -1280,9 +1561,11 @@ async def _single_endpoint_observations(
     for index in range(1, runs + 1):
         metrics_before = await _fetch_mtp_metrics(url)
         text, result = await _measure(url, body)
-        output_token_ids = await _tokenize_output(url, text)
+        output_token_ids = result.raw_output_token_ids
         tokenization_status = (
-            "available" if output_token_ids is not None else "unavailable"
+            result.token_count_validation_status
+            if output_token_ids is not None
+            else "raw_unavailable"
         )
         metrics_after = await _fetch_mtp_metrics(url)
         observations.append(
@@ -1291,8 +1574,14 @@ async def _single_endpoint_observations(
                 "result": result.__dict__,
                 "output_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 "output_token_ids": output_token_ids,
+                "raw_output_token_ids": output_token_ids,
+                "reasoning_text": result.reasoning_text,
+                "visible_content": result.visible_content,
                 "tokenization_status": tokenization_status,
-                "parity_ready": output_token_ids is not None,
+                "timing_evidence_valid": result.timing_evidence_valid,
+                "parity_ready": (
+                    output_token_ids is not None and result.timing_evidence_valid
+                ),
                 "mtp_metrics_before": metrics_before,
                 "mtp_metrics_after": metrics_after,
                 "mtp_metrics_delta": mtp_metric_delta(metrics_before, metrics_after),

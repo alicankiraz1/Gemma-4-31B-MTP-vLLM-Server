@@ -17,6 +17,17 @@ class BenchmarkEndpointResult:
     total_latency_ms: float | None
     prompt_tokens: int | None
     completion_tokens: int | None
+    raw_output_token_ids: list[int] | None = None
+    reasoning_text: str = ""
+    visible_content: str = ""
+    token_timing_basis: str = "unavailable"
+    tpot_basis: str = "unavailable"
+    itl_basis: str = "unavailable"
+    stream_chunk_interval_ms_p50: float | None = None
+    stream_chunk_interval_ms_p95: float | None = None
+    timing_evidence_valid: bool = False
+    token_count_validation_status: str = "raw_token_ids_missing"
+    raw_stream_chunks: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
