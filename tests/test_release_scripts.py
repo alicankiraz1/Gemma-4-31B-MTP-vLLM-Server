@@ -304,6 +304,38 @@ def test_p1_001_experiment_runbook_keeps_eager_ab_scoped():
     assert runbook.index("Recommendation Compare") < runbook.index("Rollback Gate")
 
 
+def test_p1_001r_runbook_documents_repaired_2x2_gates():
+    runbook = Path("docs/experiments/p1-001r-cuda-graph-2x2-maintenance.md").read_text(
+        encoding="utf-8"
+    )
+    assert "operator explicitly approves the maintenance window" in runbook
+    assert "`a8b55d474bf876f61f9b983d8a151d36633e4be8`" in runbook
+    assert "`127.0.0.1:8012`" in runbook
+    assert "`127.0.0.1:18082`" in runbook
+    assert "Live default profile must not change" in runbook
+    assert "`change_default_profile` must remain `false`" in runbook
+    for config in ("A", "B", "C", "D"):
+        assert f"| {config} |" in runbook
+    for port in ("8111", "8112", "8113", "8114"):
+        assert port in runbook
+    assert "`--enforce-eager`" in runbook
+    assert "`--speculative-config`" in runbook
+    assert "return_token_ids: true" in runbook
+    assert "same-mode MTP parity: A vs B and C vs D" in runbook
+    assert "cross-mode parity: B vs D as diagnostic only" in runbook
+    assert "Do not treat eager-vs-graph raw-token inequality alone as `do_not_adopt`" in runbook
+    assert "acceptance-rate margin: `-0.01`" in runbook
+    assert "mean-acceptance-length margin: `-0.05`" in runbook
+    assert "new 10-minute D sanity soak" in runbook
+    assert "--same-mode-mtp-parity passed" in runbook
+    assert "--final-answer-quality passed" in runbook
+    assert "doctor, `/health`, OpenAI chat, OpenAI streaming" in runbook
+    assert runbook.index("Pre-Stop Gate") < runbook.index("Stop Gate")
+    assert runbook.index("Stop Gate") < runbook.index("Matrix")
+    assert runbook.index("Matrix") < runbook.index("Candidate Sanity Soak")
+    assert runbook.index("Candidate Sanity Soak") < runbook.index("Rollback Gate")
+
+
 def test_readme_and_cli_do_not_describe_current_alpha_as_v0_1():
     readme = Path("README.md").read_text(encoding="utf-8")
     cli = Path("src/gemma4_mtp_vllm/cli.py").read_text(encoding="utf-8")
