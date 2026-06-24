@@ -252,7 +252,14 @@ class BenchmarkClientPool:
         exc: BaseException | None,
         traceback: object | None,
     ) -> None:
-        await self.aclose()
+        try:
+            await self.aclose()
+        except BaseException as close_exc:
+            if exc is not None:
+                _raise_benchmark_close_errors(
+                    [exc, *_flatten_benchmark_close_errors(close_exc)]
+                )
+            raise
 
     def client_for(self, base_url: str) -> BenchmarkHttpClient:
         client = self._clients.get(base_url)
@@ -264,8 +271,29 @@ class BenchmarkClientPool:
     async def aclose(self) -> None:
         clients = list(self._clients.values())
         self._clients.clear()
+        close_errors: list[BaseException] = []
         for client in clients:
-            await client.aclose()
+            try:
+                await client.aclose()
+            except BaseException as exc:
+                close_errors.append(exc)
+        _raise_benchmark_close_errors(close_errors)
+
+
+def _flatten_benchmark_close_errors(exc: BaseException) -> list[BaseException]:
+    if isinstance(exc, BaseExceptionGroup):
+        return list(exc.exceptions)
+    return [exc]
+
+
+def _raise_benchmark_close_errors(errors: list[BaseException]) -> None:
+    if not errors:
+        return
+    if len(errors) == 1:
+        raise errors[0]
+    if any(not isinstance(error, Exception) for error in errors):
+        raise BaseExceptionGroup("benchmark client close failed", errors)
+    raise ExceptionGroup("benchmark client close failed", errors)
 
 
 async def _measure(

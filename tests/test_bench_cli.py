@@ -86,6 +86,17 @@ class _TrackingAsyncTransport(httpx.AsyncBaseTransport):
         self.closed = True
 
 
+class _CloseProbe:
+    def __init__(self, *, failure: BaseException | None = None) -> None:
+        self.failure = failure
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+        if self.failure is not None:
+            raise self.failure
+
+
 def _make_handler(
     *,
     tps_mtp: float,
@@ -864,6 +875,78 @@ def test_bench_single_reuses_persistent_client_across_targets(monkeypatch, tmp_p
         assert metadata["client_reuse_count"] >= 1
 
 
+def test_benchmark_client_pool_close_attempts_all_clients_after_close_failure(
+    monkeypatch,
+):
+    first = _CloseProbe(failure=RuntimeError("first close failed"))
+    second = _CloseProbe()
+    created = iter([first, second])
+    monkeypatch.setattr(
+        cli_module.BenchmarkHttpClient,
+        "create",
+        staticmethod(lambda _base_url: next(created)),
+    )
+    pool = cli_module.BenchmarkClientPool()
+    pool.client_for("http://first:8000")
+    pool.client_for("http://second:8000")
+
+    with pytest.raises(RuntimeError, match="first close failed"):
+        asyncio.run(pool.aclose())
+
+    assert first.closed is True
+    assert second.closed is True
+
+
+def test_benchmark_client_pool_close_attempts_all_clients_after_close_cancellation(
+    monkeypatch,
+):
+    first = _CloseProbe(failure=asyncio.CancelledError())
+    second = _CloseProbe()
+    created = iter([first, second])
+    monkeypatch.setattr(
+        cli_module.BenchmarkHttpClient,
+        "create",
+        staticmethod(lambda _base_url: next(created)),
+    )
+    pool = cli_module.BenchmarkClientPool()
+    pool.client_for("http://first:8000")
+    pool.client_for("http://second:8000")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pool.aclose())
+
+    assert first.closed is True
+    assert second.closed is True
+
+
+def test_measure_cancellation_closes_transport(monkeypatch):
+    transports: list[_TrackingAsyncTransport] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            raise asyncio.CancelledError()
+        return httpx.Response(200, text="")
+
+    def transport_factory() -> _TrackingAsyncTransport:
+        transport = _TrackingAsyncTransport(handler)
+        transports.append(transport)
+        return transport
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr("gemma4_mtp_vllm.cli._mock_transport", transport_factory)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            cli_module._measure(
+                "http://mtp-control:8000",
+                {"model": "gemma-4-31b-mtp", "stream": True},
+            )
+        )
+
+    assert len(transports) == 1
+    assert transports[0].closed is True
+
+
 def test_bench_single_writes_structured_failure_and_closes_client(
     monkeypatch,
     tmp_path,
@@ -983,6 +1066,12 @@ def test_bench_single_flushes_completed_groups_before_later_failure(
     assert len(payload["groups"]) == 1
     assert payload["groups"][0]["output_token_target"] == 8
     assert payload["groups"][0]["observations"][0]["parity_ready"] is True
+    assert payload["failure"]["exception_type"] == "HTTPStatusError"
+    assert payload["failure"]["response"] == {
+        "status_code": 500,
+        "http_version": "HTTP/1.1",
+        "body": '{"error":"boom"}',
+    }
 
 
 def test_bench_single_requires_prompt(monkeypatch):
