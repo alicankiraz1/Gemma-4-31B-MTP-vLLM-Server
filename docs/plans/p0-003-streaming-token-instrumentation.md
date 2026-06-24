@@ -52,6 +52,9 @@ ayri saklamak.
   gecersiz olur.
 - `bench-single` adoption/parity hazirligi sadece raw token evidence valid ise
   true olur; mismatch/missing/malformed gozlemler gate icin kullanilmaz.
+- Yeni timing/event alanlari ve `tpot_basis = "chunk_arrival_approximation"`
+  enum'u nedeniyle yeni benchmark evidence payload'lari protocol version 3
+  olarak yazilir.
 
 ## Test kapsami
 
@@ -70,4 +73,3 @@ Eklenen/korunan testler sunlari kapsar:
 - ilk token'in reasoning token olmasi
 - ilk visible-content token'in ilk generated token'dan sonra gelmesi
 - raw capture'in default kapali olmasi ve secret scan reddi
-

@@ -750,6 +750,90 @@ def test_measure_raw_stream_capture_is_opt_in_and_secret_scanned(monkeypatch):
     }
 
 
+def test_measure_does_not_infer_tpot_inside_single_multi_token_chunk(monkeypatch):
+    times_ns = [0, 100_000_000, 200_000_000, 300_000_000]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok","token_ids":[12,13]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._now_ns",
+        lambda: times_ns.pop(0) if times_ns else 300_000_000,
+    )
+
+    _text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+        )
+    )
+
+    assert result.timing_evidence_valid is True
+    assert result.raw_output_token_ids == [12, 13]
+    assert result.generated_ttft_ms == pytest.approx(100.0)
+    assert result.tpot_ms is None
+    assert result.tpot_basis == "unavailable"
+    assert result.stream_chunk_interval_ms_p50 == pytest.approx(100.0)
+
+
+def test_measure_raw_stream_capture_rejects_common_token_key_names(monkeypatch):
+    times = [0.0, 0.1, 0.2, 0.3]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok","token_ids":[12]}}],'
+            '"access_token":"opaque-runtime-token"}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli.time.perf_counter",
+        lambda: times.pop(0) if times else 0.3,
+    )
+
+    _text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+            capture_raw_stream=True,
+        )
+    )
+
+    assert result.raw_stream_payloads is None
+    assert result.raw_stream_chunks is None
+    assert result.raw_stream_capture_status == "rejected_by_sanitizer"
+    assert result.raw_stream_capture_diagnostics == {
+        "rejected_event_indices": [1],
+        "reasons": ["secret_pattern"],
+    }
+
 
 def test_measure_tokenizer_fallback_uses_visible_text_not_chat_template(monkeypatch):
     times = [0.0, 0.1, 0.2, 0.8]
@@ -801,7 +885,7 @@ def test_measure_tokenizer_fallback_uses_visible_text_not_chat_template(monkeypa
     assert result.inter_token_latency_ms_p95 is None
 
 
-def test_bench_command_writes_v2_artifact_directory(monkeypatch, tmp_path):
+def test_bench_command_writes_v3_artifact_directory(monkeypatch, tmp_path):
     clock = _install_fake_clock(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -880,7 +964,7 @@ def test_bench_command_writes_v2_artifact_directory(monkeypatch, tmp_path):
     request_payloads = json.loads((artifact_dir / "request-payloads.json").read_text())
     serialized = json.dumps(results)
 
-    assert manifest["benchmark_protocol_version"] == 2
+    assert manifest["benchmark_protocol_version"] == 3
     assert manifest["package_version"] == "0.2.0a1"
     assert manifest["runtime_manifest_source"] == "provided"
     assert str(runtime_manifest) not in json.dumps(manifest)
@@ -1060,6 +1144,7 @@ def test_bench_single_records_runtime_endpoint_evidence(monkeypatch, tmp_path):
     payload = json.loads(out.read_text())
     serialized = json.dumps(payload)
     observation = payload["groups"][0]["observations"][0]
+    assert payload["benchmark_protocol_version"] == 3
     assert payload["benchmark_kind"] == "single_endpoint_runtime"
     assert payload["status"] == "complete"
     assert payload["label"] == "eager_true"
