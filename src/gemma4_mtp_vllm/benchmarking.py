@@ -28,6 +28,7 @@ class BenchmarkEndpointResult:
     timing_evidence_valid: bool = False
     token_count_validation_status: str = "raw_token_ids_missing"
     raw_stream_chunks: list[dict[str, Any]] | None = None
+    transport_metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

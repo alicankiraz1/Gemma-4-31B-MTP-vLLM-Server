@@ -12,9 +12,10 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 import typer
@@ -99,75 +100,239 @@ def _request_body(
     return body
 
 
-def _http_client(base_url: str) -> httpx.AsyncClient:
+def _http_client(
+    base_url: str,
+    *,
+    timeout: httpx.Timeout | None = None,
+    limits: httpx.Limits | None = None,
+) -> httpx.AsyncClient:
+    timeout = timeout or _vllm_http_timeout()
+    limits = limits or _vllm_http_limits()
     transport = _build_transport()
+    kwargs: dict[str, Any] = {
+        "base_url": base_url,
+        "timeout": timeout,
+        "limits": limits,
+        "http1": True,
+        "http2": False,
+    }
     if transport is not None:
-        return httpx.AsyncClient(
-            transport=transport,
-            base_url=base_url,
-            timeout=_vllm_http_timeout(),
-        )
-    return httpx.AsyncClient(base_url=base_url, timeout=_vllm_http_timeout())
+        kwargs["transport"] = transport
+    return httpx.AsyncClient(**kwargs)
 
 
 def _vllm_http_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=10.0, read=None, write=30.0, pool=30.0)
 
 
+def _vllm_http_limits() -> httpx.Limits:
+    return httpx.Limits(
+        max_connections=20,
+        max_keepalive_connections=20,
+        keepalive_expiry=30.0,
+    )
+
+
+def _timeout_metadata(timeout: httpx.Timeout) -> dict[str, float | None]:
+    return {
+        "connect": timeout.connect,
+        "read": timeout.read,
+        "write": timeout.write,
+        "pool": timeout.pool,
+    }
+
+
+def _limits_metadata(limits: httpx.Limits) -> dict[str, float | int | None]:
+    return {
+        "max_connections": limits.max_connections,
+        "max_keepalive_connections": limits.max_keepalive_connections,
+        "keepalive_expiry": limits.keepalive_expiry,
+    }
+
+
+class BenchmarkHttpClient:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        http: httpx.AsyncClient,
+        timeout: httpx.Timeout,
+        limits: httpx.Limits,
+    ) -> None:
+        self.base_url = base_url
+        self._http = http
+        self._timeout = timeout
+        self._limits = limits
+        self._request_count = 0
+        self._connection_use_counts: dict[int, int] = {}
+        self._connection_reuse_count = 0
+        self._connection_reuse_observable = False
+        self._last_http_version: str | None = None
+
+    @classmethod
+    def create(cls, base_url: str) -> "BenchmarkHttpClient":
+        timeout = _vllm_http_timeout()
+        limits = _vllm_http_limits()
+        return cls(
+            base_url=base_url,
+            http=_http_client(base_url, timeout=timeout, limits=limits),
+            timeout=timeout,
+            limits=limits,
+        )
+
+    @asynccontextmanager
+    async def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        json_body: dict,
+    ) -> AsyncIterator[httpx.Response]:
+        self._request_count += 1
+        async with self._http.stream(method, url, json=json_body) as response:
+            self._record_response(response)
+            yield response
+
+    async def get(self, url: str) -> httpx.Response:
+        self._request_count += 1
+        response = await self._http.get(url)
+        self._record_response(response)
+        return response
+
+    async def post(self, url: str, *, json_body: dict) -> httpx.Response:
+        self._request_count += 1
+        response = await self._http.post(url, json=json_body)
+        self._record_response(response)
+        return response
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+    def metadata(self, response: httpx.Response | None = None) -> dict[str, object]:
+        http_version = response.http_version if response is not None else None
+        if http_version is None:
+            http_version = self._last_http_version
+        return {
+            "http_version": http_version,
+            "connection_reuse_count": (
+                self._connection_reuse_count
+                if self._connection_reuse_observable
+                else None
+            ),
+            "connection_reuse_observable": self._connection_reuse_observable,
+            "client_request_count": self._request_count,
+            "client_reuse_count": max(self._request_count - 1, 0),
+            "timeout": _timeout_metadata(self._timeout),
+            "limits": _limits_metadata(self._limits),
+        }
+
+    def _record_response(self, response: httpx.Response) -> None:
+        self._last_http_version = response.http_version
+        network_stream = response.extensions.get("network_stream")
+        if network_stream is None:
+            return
+        self._connection_reuse_observable = True
+        key = id(network_stream)
+        prior_uses = self._connection_use_counts.get(key, 0)
+        if prior_uses > 0:
+            self._connection_reuse_count += 1
+        self._connection_use_counts[key] = prior_uses + 1
+
+
+class BenchmarkClientPool:
+    def __init__(self) -> None:
+        self._clients: dict[str, BenchmarkHttpClient] = {}
+
+    async def __aenter__(self) -> "BenchmarkClientPool":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        await self.aclose()
+
+    def client_for(self, base_url: str) -> BenchmarkHttpClient:
+        client = self._clients.get(base_url)
+        if client is None:
+            client = BenchmarkHttpClient.create(base_url)
+            self._clients[base_url] = client
+        return client
+
+    async def aclose(self) -> None:
+        clients = list(self._clients.values())
+        self._clients.clear()
+        for client in clients:
+            await client.aclose()
+
+
 async def _measure(
     base_url: str,
     body: dict,
+    *,
+    client: BenchmarkHttpClient | None = None,
 ) -> tuple[str, BenchmarkEndpointResult]:
-    async with _http_client(base_url) as http:
-        start = time.perf_counter()
-        generated_token_chunk_times: list[float] = []
-        stream_chunk_times: list[float] = []
-        raw_output_token_ids: list[int] = []
-        output_parts: list[str] = []
-        reasoning_parts: list[str] = []
-        raw_stream_chunks: list[dict[str, object]] = []
-        prompt_tokens: int | None = None
-        completion_tokens: int | None = None
-        async with http.stream("POST", "/v1/chat/completions", json=body) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                raw = line.removeprefix("data: ").strip()
-                if raw == "[DONE]":
-                    break
-                payload = json.loads(raw)
-                raw_stream_chunks.append(payload)
-                chunk_token_ids = _stream_chunk_token_ids(payload)
-                chunk_reasoning_parts: list[str] = []
-                chunk_content_parts: list[str] = []
-                usage = payload.get("usage") or {}
-                if usage:
-                    prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                    completion_tokens = int(usage.get("completion_tokens") or 0)
-                for choice in payload.get("choices") or []:
-                    delta = choice.get("delta") or {}
-                    reasoning = delta.get("reasoning")
-                    if reasoning is None:
-                        reasoning = delta.get("reasoning_content")
-                    if reasoning:
-                        chunk_reasoning_parts.append(str(reasoning))
-                    content = delta.get("content")
-                    if content:
-                        chunk_content_parts.append(str(content))
-                if chunk_token_ids or chunk_reasoning_parts or chunk_content_parts:
-                    chunk_time = time.perf_counter()
-                    if chunk_token_ids:
-                        raw_output_token_ids.extend(chunk_token_ids)
-                        generated_token_chunk_times.append(chunk_time)
-                    stream_chunk_times.append(chunk_time)
-                    reasoning_parts.extend(chunk_reasoning_parts)
-                    output_parts.extend(chunk_content_parts)
-        end = time.perf_counter()
+    if client is None:
+        async with BenchmarkClientPool() as pool:
+            return await _measure(base_url, body, client=pool.client_for(base_url))
+
+    start = time.perf_counter()
+    generated_token_chunk_times: list[float] = []
+    stream_chunk_times: list[float] = []
+    raw_output_token_ids: list[int] = []
+    output_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    raw_stream_chunks: list[dict[str, object]] = []
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    transport_metadata: dict[str, object] | None = None
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json_body=body,
+    ) as response:
+        transport_metadata = client.metadata(response)
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            raw = line.removeprefix("data: ").strip()
+            if raw == "[DONE]":
+                break
+            payload = json.loads(raw)
+            raw_stream_chunks.append(payload)
+            chunk_token_ids = _stream_chunk_token_ids(payload)
+            chunk_reasoning_parts: list[str] = []
+            chunk_content_parts: list[str] = []
+            usage = payload.get("usage") or {}
+            if usage:
+                prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                completion_tokens = int(usage.get("completion_tokens") or 0)
+            for choice in payload.get("choices") or []:
+                delta = choice.get("delta") or {}
+                reasoning = delta.get("reasoning")
+                if reasoning is None:
+                    reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    chunk_reasoning_parts.append(str(reasoning))
+                content = delta.get("content")
+                if content:
+                    chunk_content_parts.append(str(content))
+            if chunk_token_ids or chunk_reasoning_parts or chunk_content_parts:
+                chunk_time = time.perf_counter()
+                if chunk_token_ids:
+                    raw_output_token_ids.extend(chunk_token_ids)
+                    generated_token_chunk_times.append(chunk_time)
+                stream_chunk_times.append(chunk_time)
+                reasoning_parts.extend(chunk_reasoning_parts)
+                output_parts.extend(chunk_content_parts)
+    end = time.perf_counter()
     text = "".join(output_parts)
     reasoning_text = "".join(reasoning_parts)
     if not raw_output_token_ids and completion_tokens is None and text:
-        completion_tokens = await _count_output_tokens(base_url, text)
+        completion_tokens = await _count_output_tokens(base_url, text, client=client)
     observed_completion_tokens = completion_tokens
     token_count_status = "raw_token_ids_missing"
     timing_evidence_valid = False
@@ -242,6 +407,7 @@ async def _measure(
         timing_evidence_valid=timing_evidence_valid,
         token_count_validation_status=token_count_status,
         raw_stream_chunks=raw_stream_chunks,
+        transport_metadata=transport_metadata,
     )
     return text, result
 
@@ -277,32 +443,56 @@ def _stream_chunk_token_ids(payload: dict[str, object]) -> list[int]:
     return tokens
 
 
-async def _fetch_mtp_metrics(base_url: str) -> dict:
-    return parse_mtp_metrics(await _fetch_metrics_text(base_url))
+async def _fetch_mtp_metrics(
+    base_url: str,
+    *,
+    client: BenchmarkHttpClient | None = None,
+) -> dict:
+    return parse_mtp_metrics(await _fetch_metrics_text(base_url, client=client))
 
 
-async def _fetch_metrics_text(base_url: str) -> str:
+async def _fetch_metrics_text(
+    base_url: str,
+    *,
+    client: BenchmarkHttpClient | None = None,
+) -> str:
+    if client is None:
+        async with BenchmarkClientPool() as pool:
+            return await _fetch_metrics_text(
+                base_url,
+                client=pool.client_for(base_url),
+            )
     try:
-        async with _http_client(base_url) as http:
-            response = await http.get("/metrics")
-            response.raise_for_status()
-            return response.text
+        response = await client.get("/metrics")
+        response.raise_for_status()
+        return response.text
     except Exception:
         return ""
 
 
-async def _tokenize_visible_text(base_url: str, text: str) -> dict | None:
-    try:
-        async with _http_client(base_url) as http:
-            response = await http.post(
-                "/tokenize",
-                json={
-                    "model": DEFAULT_MODEL_ALIAS,
-                    "prompt": text,
-                },
+async def _tokenize_visible_text(
+    base_url: str,
+    text: str,
+    *,
+    client: BenchmarkHttpClient | None = None,
+) -> dict | None:
+    if client is None:
+        async with BenchmarkClientPool() as pool:
+            return await _tokenize_visible_text(
+                base_url,
+                text,
+                client=pool.client_for(base_url),
             )
-            response.raise_for_status()
-            return response.json()
+    try:
+        response = await client.post(
+            "/tokenize",
+            json_body={
+                "model": DEFAULT_MODEL_ALIAS,
+                "prompt": text,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
     except Exception:
         return None
 
@@ -328,12 +518,26 @@ def _count_from_tokenize_payload(payload: dict | None) -> int | None:
     return None
 
 
-async def _count_output_tokens(base_url: str, text: str) -> int | None:
-    return _count_from_tokenize_payload(await _tokenize_visible_text(base_url, text))
+async def _count_output_tokens(
+    base_url: str,
+    text: str,
+    *,
+    client: BenchmarkHttpClient | None = None,
+) -> int | None:
+    return _count_from_tokenize_payload(
+        await _tokenize_visible_text(base_url, text, client=client)
+    )
 
 
-async def _tokenize_output(base_url: str, text: str) -> list[int] | None:
-    return _tokens_from_tokenize_payload(await _tokenize_visible_text(base_url, text))
+async def _tokenize_output(
+    base_url: str,
+    text: str,
+    *,
+    client: BenchmarkHttpClient | None = None,
+) -> list[int] | None:
+    return _tokens_from_tokenize_payload(
+        await _tokenize_visible_text(base_url, text, client=client)
+    )
 
 
 async def _deterministic_parity_for_outputs(
@@ -342,9 +546,19 @@ async def _deterministic_parity_for_outputs(
     mtp_url: str,
     baseline_text: str,
     mtp_text: str,
+    baseline_client: BenchmarkHttpClient | None = None,
+    mtp_client: BenchmarkHttpClient | None = None,
 ) -> tuple[bool | None, str]:
-    baseline_tokens = await _tokenize_output(baseline_url, baseline_text)
-    mtp_tokens = await _tokenize_output(mtp_url, mtp_text)
+    baseline_tokens = await _tokenize_output(
+        baseline_url,
+        baseline_text,
+        client=baseline_client,
+    )
+    mtp_tokens = await _tokenize_output(
+        mtp_url,
+        mtp_text,
+        client=mtp_client,
+    )
     if baseline_tokens is not None and mtp_tokens is not None:
         return baseline_tokens == mtp_tokens, "token"
     return (
@@ -367,7 +581,23 @@ async def _single_bench(
     baseline_url: str,
     runs: int,
     warmup_runs: int,
+    client_pool: BenchmarkClientPool | None = None,
 ) -> list[BenchmarkObservation]:
+    if client_pool is None:
+        async with BenchmarkClientPool() as pool:
+            return await _single_bench(
+                profile=profile,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                mtp_url=mtp_url,
+                baseline_url=baseline_url,
+                runs=runs,
+                warmup_runs=warmup_runs,
+                client_pool=pool,
+            )
+
+    mtp_client = client_pool.client_for(mtp_url)
+    baseline_client = client_pool.client_for(baseline_url)
     body = _request_body(
         profile,
         prompt=prompt,
@@ -378,26 +608,48 @@ async def _single_bench(
     )
 
     for _ in range(warmup_runs):
-        await _measure(mtp_url, body)
-        await _measure(baseline_url, body)
+        await _measure(mtp_url, body, client=mtp_client)
+        await _measure(baseline_url, body, client=baseline_client)
 
     observations: list[BenchmarkObservation] = []
     for idx in range(1, runs + 1):
         if idx % 2:
-            mtp_metrics_before = await _fetch_mtp_metrics(mtp_url)
-            mtp_text, mtp_result = await _measure(mtp_url, body)
-            mtp_metrics_after = await _fetch_mtp_metrics(mtp_url)
-            no_text, baseline_result = await _measure(baseline_url, body)
+            mtp_metrics_before = await _fetch_mtp_metrics(
+                mtp_url,
+                client=mtp_client,
+            )
+            mtp_text, mtp_result = await _measure(mtp_url, body, client=mtp_client)
+            mtp_metrics_after = await _fetch_mtp_metrics(
+                mtp_url,
+                client=mtp_client,
+            )
+            no_text, baseline_result = await _measure(
+                baseline_url,
+                body,
+                client=baseline_client,
+            )
         else:
-            no_text, baseline_result = await _measure(baseline_url, body)
-            mtp_metrics_before = await _fetch_mtp_metrics(mtp_url)
-            mtp_text, mtp_result = await _measure(mtp_url, body)
-            mtp_metrics_after = await _fetch_mtp_metrics(mtp_url)
+            no_text, baseline_result = await _measure(
+                baseline_url,
+                body,
+                client=baseline_client,
+            )
+            mtp_metrics_before = await _fetch_mtp_metrics(
+                mtp_url,
+                client=mtp_client,
+            )
+            mtp_text, mtp_result = await _measure(mtp_url, body, client=mtp_client)
+            mtp_metrics_after = await _fetch_mtp_metrics(
+                mtp_url,
+                client=mtp_client,
+            )
         parity, parity_basis = await _deterministic_parity_for_outputs(
             baseline_url=baseline_url,
             mtp_url=mtp_url,
             baseline_text=no_text,
             mtp_text=mtp_text,
+            baseline_client=baseline_client,
+            mtp_client=mtp_client,
         )
         observations.append(
             BenchmarkObservation(
@@ -609,23 +861,33 @@ def bench(
 ) -> None:
     """Compare MTP vs baseline vLLM endpoints for a single prompt."""
     selected = resolve_profile(profile, _profile_set())
-    metrics_before_text = (
-        asyncio.run(_fetch_metrics_text(mtp_url)) if artifact_root is not None else ""
-    )
-    observations = asyncio.run(
-        _single_bench(
-            profile=selected,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            mtp_url=mtp_url,
-            baseline_url=baseline_url,
-            runs=runs,
-            warmup_runs=warmup_runs,
-        )
-    )
-    metrics_after_text = (
-        asyncio.run(_fetch_metrics_text(mtp_url)) if artifact_root is not None else ""
-    )
+
+    async def run() -> tuple[str, list[BenchmarkObservation], str]:
+        async with BenchmarkClientPool() as pool:
+            mtp_client = pool.client_for(mtp_url)
+            metrics_before = (
+                await _fetch_metrics_text(mtp_url, client=mtp_client)
+                if artifact_root is not None
+                else ""
+            )
+            benchmark_observations = await _single_bench(
+                profile=selected,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                mtp_url=mtp_url,
+                baseline_url=baseline_url,
+                runs=runs,
+                warmup_runs=warmup_runs,
+                client_pool=pool,
+            )
+            metrics_after = (
+                await _fetch_metrics_text(mtp_url, client=mtp_client)
+                if artifact_root is not None
+                else ""
+            )
+            return metrics_before, benchmark_observations, metrics_after
+
+    metrics_before_text, observations, metrics_after_text = asyncio.run(run())
     summary = BenchmarkSummary(
         profile=selected.name,
         prompt_name="default",
@@ -703,40 +965,104 @@ def bench_single(
         "service_url": url,
         "groups": groups,
     }
-    for prompt_index, prompt_value in enumerate(prompt, start=1):
-        for target in output_token_targets:
-            body = _request_body(
-                selected,
-                prompt=prompt_value,
-                max_tokens=target,
-                temperature=0.0,
-                top_p=1.0,
-                seed=1,
-            )
-            observations = asyncio.run(
-                _single_endpoint_observations(
-                    url=url,
-                    body=body,
-                    runs=runs,
-                    warmup_runs=warmup_runs,
-                )
-            )
-            groups.append(
-                _single_endpoint_group_payload(
-                    prompt_name=f"prompt_{prompt_index}",
-                    prompt=prompt_value,
-                    output_token_target=target,
-                    request_body=body,
-                    observations=observations,
-                )
-            )
-            if output_path is not None:
-                _write_json(output_path, payload)
+
+    async def run_groups() -> None:
+        async with BenchmarkClientPool() as pool:
+            for prompt_index, prompt_value in enumerate(prompt, start=1):
+                prompt_name = f"prompt_{prompt_index}"
+                for target in output_token_targets:
+                    body = _request_body(
+                        selected,
+                        prompt=prompt_value,
+                        max_tokens=target,
+                        temperature=0.0,
+                        top_p=1.0,
+                        seed=1,
+                    )
+                    try:
+                        observations = await _single_endpoint_observations(
+                            url=url,
+                            body=body,
+                            runs=runs,
+                            warmup_runs=warmup_runs,
+                            client_pool=pool,
+                        )
+                    except Exception as exc:
+                        payload["failure"] = _benchmark_failure_evidence(
+                            exc,
+                            phase="bench-single",
+                            url=url,
+                            prompt_name=prompt_name,
+                            output_token_target=target,
+                        )
+                        if output_path is not None:
+                            _write_json(output_path, payload)
+                        raise
+                    groups.append(
+                        _single_endpoint_group_payload(
+                            prompt_name=prompt_name,
+                            prompt=prompt_value,
+                            output_token_target=target,
+                            request_body=body,
+                            observations=observations,
+                        )
+                    )
+                    if output_path is not None:
+                        _write_json(output_path, payload)
+
+    asyncio.run(run_groups())
     payload["status"] = "complete"
     rendered = json.dumps(payload, indent=2, allow_nan=False)
     if output_path is not None:
         output_path.write_text(rendered, encoding="utf-8")
     typer.echo(rendered)
+
+
+def _benchmark_failure_evidence(
+    exc: Exception,
+    *,
+    phase: str,
+    url: str,
+    prompt_name: str | None = None,
+    output_token_target: int | None = None,
+) -> dict[str, object]:
+    request = getattr(exc, "request", None)
+    response = getattr(exc, "response", None)
+    return {
+        "kind": "request_failed",
+        "phase": phase,
+        "url": url,
+        "prompt_name": prompt_name,
+        "output_token_target": output_token_target,
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+        "request": (
+            {
+                "method": request.method,
+                "url": str(request.url),
+            }
+            if isinstance(request, httpx.Request)
+            else None
+        ),
+        "response": _benchmark_failure_response_evidence(response),
+    }
+
+
+def _benchmark_failure_response_evidence(response: object) -> dict[str, object] | None:
+    if not isinstance(response, httpx.Response):
+        return None
+    return {
+        "status_code": response.status_code,
+        "http_version": response.http_version,
+        "body": _safe_response_text(response),
+    }
+
+
+def _safe_response_text(response: httpx.Response) -> str | None:
+    try:
+        return response.text
+    except Exception:
+        return None
 
 
 @app.command("bench-compare")
@@ -1553,21 +1879,33 @@ async def _single_endpoint_observations(
     body: dict,
     runs: int,
     warmup_runs: int,
+    client_pool: BenchmarkClientPool | None = None,
 ) -> list[dict[str, object]]:
+    if client_pool is None:
+        async with BenchmarkClientPool() as pool:
+            return await _single_endpoint_observations(
+                url=url,
+                body=body,
+                runs=runs,
+                warmup_runs=warmup_runs,
+                client_pool=pool,
+            )
+
+    client = client_pool.client_for(url)
     for _ in range(warmup_runs):
-        await _measure(url, body)
+        await _measure(url, body, client=client)
 
     observations: list[dict[str, object]] = []
     for index in range(1, runs + 1):
-        metrics_before = await _fetch_mtp_metrics(url)
-        text, result = await _measure(url, body)
+        metrics_before = await _fetch_mtp_metrics(url, client=client)
+        text, result = await _measure(url, body, client=client)
         output_token_ids = result.raw_output_token_ids
         tokenization_status = (
             result.token_count_validation_status
             if output_token_ids is not None
             else "raw_unavailable"
         )
-        metrics_after = await _fetch_mtp_metrics(url)
+        metrics_after = await _fetch_mtp_metrics(url, client=client)
         observations.append(
             {
                 "index": index,
@@ -1806,40 +2144,45 @@ def bench_matrix(
         raise typer.Exit(code=2)
 
     selected_base = resolve_profile(profile, _profile_set())
-    results: list[dict] = []
     output_token_targets = output_token_target or [64]
-    # Use enumerate() rather than prompt.index(prompt_value) so duplicate
-    # prompts get distinct prompt_name labels.
-    for prompt_index, prompt_value in enumerate(prompt, start=1):
-        for n in num_speculative_tokens:
-            for target in output_token_targets:
-                # dataclasses.replace() is the canonical copy-with-override for
-                # frozen dataclasses; avoids touching the private __dict__.
-                adjusted = replace(selected_base, num_speculative_tokens=n)
-                selected_mtp_url = mtp_urls.get(n) or mtp_url
-                if selected_mtp_url is None:
-                    typer.echo("missing MTP URL", err=True)
-                    raise typer.Exit(code=2)
-                observations = asyncio.run(
-                    _single_bench(
-                        profile=adjusted,
-                        prompt=prompt_value,
-                        max_tokens=target,
-                        mtp_url=selected_mtp_url,
-                        baseline_url=baseline_url,
-                        runs=runs,
-                        warmup_runs=warmup_runs,
-                    )
-                )
-                summary = BenchmarkSummary(
-                    profile=adjusted.name,
-                    prompt_name=f"prompt_{prompt_index}",
-                    prompt=prompt_value,
-                    output_token_target=target,
-                    num_speculative_tokens=n,
-                    observations=observations,
-                )
-                results.append(summary.to_dict())
+
+    async def run_matrix() -> list[dict]:
+        results: list[dict] = []
+        async with BenchmarkClientPool() as pool:
+            # Use enumerate() rather than prompt.index(prompt_value) so duplicate
+            # prompts get distinct prompt_name labels.
+            for prompt_index, prompt_value in enumerate(prompt, start=1):
+                for n in num_speculative_tokens:
+                    for target in output_token_targets:
+                        # dataclasses.replace() is the canonical copy-with-override for
+                        # frozen dataclasses; avoids touching the private __dict__.
+                        adjusted = replace(selected_base, num_speculative_tokens=n)
+                        selected_mtp_url = mtp_urls.get(n) or mtp_url
+                        if selected_mtp_url is None:
+                            typer.echo("missing MTP URL", err=True)
+                            raise typer.Exit(code=2)
+                        observations = await _single_bench(
+                            profile=adjusted,
+                            prompt=prompt_value,
+                            max_tokens=target,
+                            mtp_url=selected_mtp_url,
+                            baseline_url=baseline_url,
+                            runs=runs,
+                            warmup_runs=warmup_runs,
+                            client_pool=pool,
+                        )
+                        summary = BenchmarkSummary(
+                            profile=adjusted.name,
+                            prompt_name=f"prompt_{prompt_index}",
+                            prompt=prompt_value,
+                            output_token_target=target,
+                            num_speculative_tokens=n,
+                            observations=observations,
+                        )
+                        results.append(summary.to_dict())
+        return results
+
+    results = asyncio.run(run_matrix())
     rendered = json.dumps(results, indent=2)
     if json_output:
         Path(json_output).write_text(rendered, encoding="utf-8")

@@ -45,7 +45,11 @@ def _install_fake_clock(monkeypatch) -> _FakeBenchClock:
     return clock
 
 
-def _stream_response(*, text: str) -> httpx.Response:
+def _stream_response(
+    *,
+    text: str,
+    extensions: dict[str, object] | None = None,
+) -> httpx.Response:
     chunks = "".join(
         (
             'data: {"choices":[{"delta":'
@@ -64,7 +68,22 @@ def _stream_response(*, text: str) -> httpx.Response:
         200,
         headers={"content-type": "text/event-stream"},
         content=body.encode(),
+        extensions=extensions or {},
     )
+
+
+class _TrackingAsyncTransport(httpx.AsyncBaseTransport):
+    def __init__(self, handler) -> None:
+        self._handler = handler
+        self.requests: list[httpx.Request] = []
+        self.closed = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self._handler(request)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _make_handler(
@@ -771,6 +790,139 @@ def test_bench_single_records_runtime_endpoint_evidence(monkeypatch, tmp_path):
     assert "generation_tps" not in serialized
     assert captured_bodies
     assert all(request_body["ignore_eos"] is True for request_body in captured_bodies)
+
+
+def test_bench_single_reuses_persistent_client_across_targets(monkeypatch, tmp_path):
+    clock = _install_fake_clock(monkeypatch)
+    network_stream = object()
+    transports: list[_TrackingAsyncTransport] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        extensions = {
+            "http_version": b"HTTP/1.1",
+            "network_stream": network_stream,
+        }
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text="", extensions=extensions)
+        if request.url.path == "/v1/chat/completions":
+            clock.schedule(completion_tokens=8, tps=20.0)
+            return _stream_response(text="response", extensions=extensions)
+        return httpx.Response(404, extensions=extensions)
+
+    def transport_factory() -> _TrackingAsyncTransport:
+        transport = _TrackingAsyncTransport(handler)
+        transports.append(transport)
+        return transport
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr("gemma4_mtp_vllm.cli._mock_transport", transport_factory)
+
+    out = tmp_path / "single.json"
+    result = runner.invoke(
+        app,
+        [
+            "bench-single",
+            "--url",
+            "http://mtp-control:8000",
+            "--prompt",
+            "alpha",
+            "--output-token-target",
+            "8",
+            "--output-token-target",
+            "16",
+            "--runs",
+            "2",
+            "--warmup-runs",
+            "1",
+            "--json-output",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert len(transports) == 1
+    assert transports[0].closed is True
+    payload = json.loads(out.read_text())
+    observations = [
+        observation
+        for group in payload["groups"]
+        for observation in group["observations"]
+    ]
+    assert len(observations) == 4
+    assert {group["output_token_target"] for group in payload["groups"]} == {8, 16}
+    for observation in observations:
+        metadata = observation["result"]["transport_metadata"]
+        assert metadata["http_version"] == "HTTP/1.1"
+        assert metadata["timeout"] == {
+            "connect": 10.0,
+            "read": None,
+            "write": 30.0,
+            "pool": 30.0,
+        }
+        assert metadata["connection_reuse_observable"] is True
+        assert metadata["connection_reuse_count"] >= 1
+        assert metadata["client_reuse_count"] >= 1
+
+
+def test_bench_single_writes_structured_failure_and_closes_client(
+    monkeypatch,
+    tmp_path,
+):
+    transports: list[_TrackingAsyncTransport] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text="")
+        raise httpx.ConnectError("no route", request=request)
+
+    def transport_factory() -> _TrackingAsyncTransport:
+        transport = _TrackingAsyncTransport(handler)
+        transports.append(transport)
+        return transport
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr("gemma4_mtp_vllm.cli._mock_transport", transport_factory)
+
+    out = tmp_path / "failed-single.json"
+    result = runner.invoke(
+        app,
+        [
+            "bench-single",
+            "--url",
+            "http://mtp-control:8000",
+            "--prompt",
+            "alpha",
+            "--output-token-target",
+            "8",
+            "--runs",
+            "1",
+            "--warmup-runs",
+            "0",
+            "--json-output",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert len(transports) == 1
+    assert transports[0].closed is True
+    payload = json.loads(out.read_text())
+    assert payload["status"] == "in_progress"
+    assert payload["groups"] == []
+    assert payload["failure"] == {
+        "kind": "request_failed",
+        "phase": "bench-single",
+        "url": "http://mtp-control:8000",
+        "prompt_name": "prompt_1",
+        "output_token_target": 8,
+        "exception_type": "ConnectError",
+        "message": "no route",
+        "request": {
+            "method": "POST",
+            "url": "http://mtp-control:8000/v1/chat/completions",
+        },
+        "response": None,
+    }
 
 
 def test_bench_single_flushes_completed_groups_before_later_failure(
