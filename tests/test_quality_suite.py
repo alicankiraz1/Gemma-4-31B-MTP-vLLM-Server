@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from gemma4_mtp_vllm.quality_suite import (
+    QualityTask,
+    build_quality_request_body,
+    default_quality_suite,
+    detect_thought_leakage,
+    evaluate_quality_task,
+    suite_category_counts,
+    validate_patch_apply,
+)
+
+
+def test_quality_request_body_is_natural_eos_without_min_tokens():
+    body = build_quality_request_body(
+        model="gemma-4-31b-mtp",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=256,
+    )
+
+    assert body["temperature"] == 0.0
+    assert body["top_p"] == 1.0
+    assert body["seed"] == 1
+    assert body["ignore_eos"] is False
+    assert body["stream"] is False
+    assert body["max_tokens"] == 256
+    assert "min_tokens" not in body
+
+
+def test_default_quality_suite_category_counts():
+    counts = suite_category_counts(default_quality_suite())
+
+    assert counts == {
+        "bug_fix_tests": 1,
+        "coding_python_unit": 10,
+        "coding_systems_static": 5,
+        "deterministic_reasoning": 10,
+        "multi_turn_history_sensitive": 5,
+        "patch_apply": 1,
+        "retrieval_context_grounded": 10,
+        "structured_json": 10,
+        "turkish_technical_security": 10,
+    }
+
+
+def test_json_schema_validation_tracks_json_and_schema_validity():
+    task = QualityTask(
+        task_id="json_test",
+        category="structured_json",
+        validator="json_schema",
+        schema={
+            "type": "object",
+            "required": ["status", "score"],
+            "properties": {
+                "status": {"type": "string"},
+                "score": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        messages=[],
+    )
+
+    passed = evaluate_quality_task(
+        task,
+        content='{"status":"ok","score":3}',
+        finish_reason="stop",
+    )
+    wrong_schema = evaluate_quality_task(
+        task,
+        content='{"status":"ok","score":"3"}',
+        finish_reason="stop",
+    )
+    invalid_json = evaluate_quality_task(
+        task,
+        content="{not-json}",
+        finish_reason="stop",
+    )
+
+    assert passed["passed"] is True
+    assert passed["json_valid"] is True
+    assert passed["schema_valid"] is True
+    assert wrong_schema["json_valid"] is True
+    assert wrong_schema["schema_valid"] is False
+    assert invalid_json["json_valid"] is False
+    assert invalid_json["schema_valid"] is False
+
+
+def test_thought_leakage_detection_checks_content_and_reasoning_fields():
+    assert detect_thought_leakage("<think>hidden</think> final") is True
+    assert detect_thought_leakage("final", message={"reasoning_content": "hidden"})
+    assert detect_thought_leakage("plain final", message={"content": "plain final"}) is False
+
+
+def test_patch_apply_validation_accepts_git_patch():
+    patch = """diff --git a/config.py b/config.py
+--- a/config.py
++++ b/config.py
+@@ -1 +1 @@
+-TIMEOUT = 30
++TIMEOUT = 45
+"""
+
+    result = validate_patch_apply(patch, files={"config.py": "TIMEOUT = 30\n"})
+
+    assert result["passed"] is True
+
+
+def test_patch_apply_validation_rejects_non_applicable_patch():
+    patch = """diff --git a/config.py b/config.py
+--- a/config.py
++++ b/config.py
+@@ -1 +1 @@
+-MISSING = 30
++TIMEOUT = 45
+"""
+
+    result = validate_patch_apply(patch, files={"config.py": "TIMEOUT = 30\n"})
+
+    assert result["passed"] is False

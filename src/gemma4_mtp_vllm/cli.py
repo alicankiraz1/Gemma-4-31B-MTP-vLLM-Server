@@ -45,6 +45,12 @@ from gemma4_mtp_vllm.profiles import (
     load_profiles,
     resolve_profile,
 )
+from gemma4_mtp_vllm.quality_suite import (
+    build_quality_request_body,
+    default_quality_suite,
+    evaluate_quality_task,
+    quality_report,
+)
 from gemma4_mtp_vllm.server.app import DEFAULT_MODEL_ALIAS
 from gemma4_mtp_vllm.server.app import create_app
 from gemma4_mtp_vllm.server.bind_policy import bind_host_requires_api_key
@@ -60,6 +66,7 @@ P1_001_MIN_SOAK_SECONDS = 3600.0
 P1_001_ACCEPTANCE_RATE_MARGIN = -0.01
 P1_001_MEAN_ACCEPTANCE_LENGTH_MARGIN = -0.05
 BENCHMARK_PROTOCOL_VERSION = 3
+THROUGHPUT_BENCHMARK_LANE = "throughput_fixed_length"
 P0_004_EAGER_PROFILE = "tp2_2x32_fp8_gpuonly"
 P0_004_GRAPH_PROFILE = "tp2_2x32_fp8_gpuonly_cuda_graph"
 P0_004_EXPECTED_ROLES = {
@@ -1205,6 +1212,7 @@ def bench(
         observations=observations,
     )
     payload = summary.to_dict()
+    payload["benchmark_lane"] = THROUGHPUT_BENCHMARK_LANE
     request_body = _request_body(
         selected,
         prompt=prompt,
@@ -1230,6 +1238,79 @@ def bench(
     if json_output:
         Path(json_output).write_text(rendered, encoding="utf-8")
     typer.echo(rendered)
+
+
+@app.command("bench-quality")
+def bench_quality(
+    url: str = typer.Option(..., "--url"),
+    profile: str = typer.Option("safe80", "--profile"),
+    json_output: Optional[str] = typer.Option(None, "--json-output"),
+) -> None:
+    """Run the deterministic natural-EOS local quality suite against one endpoint."""
+    selected = resolve_profile(profile, _profile_set())
+    tasks = default_quality_suite()
+
+    async def run() -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
+        async with BenchmarkClientPool() as pool:
+            client = pool.client_for(url)
+            for task in tasks:
+                body = build_quality_request_body(
+                    model=DEFAULT_MODEL_ALIAS,
+                    messages=task.messages,
+                    max_tokens=task.max_tokens,
+                )
+                response = await client.post(
+                    "/v1/chat/completions",
+                    json_body=body,
+                )
+                response.raise_for_status()
+                content, finish_reason, message = _quality_chat_completion_content(
+                    response.json()
+                )
+                results.append(
+                    evaluate_quality_task(
+                        task,
+                        content=content,
+                        finish_reason=finish_reason,
+                        message=message,
+                    )
+                )
+        return results
+
+    payload = quality_report(
+        service_url=url,
+        profile=selected.name,
+        model=DEFAULT_MODEL_ALIAS,
+        tasks=tasks,
+        task_results=asyncio.run(run()),
+    )
+    rendered = json.dumps(payload, indent=2, allow_nan=False)
+    if json_output:
+        Path(json_output).write_text(rendered, encoding="utf-8")
+    typer.echo(rendered)
+
+
+def _quality_chat_completion_content(
+    payload: dict[str, Any],
+) -> tuple[str, str | None, dict[str, Any]]:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return "", None, {}
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return "", None, {}
+    finish_reason = choice.get("finish_reason")
+    finish_reason_text = finish_reason if isinstance(finish_reason, str) else None
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return "", finish_reason_text, {}
+    content = message.get("content")
+    return (
+        content if isinstance(content, str) else "",
+        finish_reason_text,
+        message,
+    )
 
 
 @app.command("bench-single")
@@ -1273,6 +1354,7 @@ def bench_single(
     groups: list[dict[str, object]] = []
     payload = {
         "benchmark_protocol_version": BENCHMARK_PROTOCOL_VERSION,
+        "benchmark_lane": THROUGHPUT_BENCHMARK_LANE,
         "benchmark_kind": "single_endpoint_runtime",
         "status": "in_progress",
         "label": label,
@@ -2937,6 +3019,7 @@ def _write_benchmark_artifacts(
             else "unavailable"
         ),
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "benchmark_lane": THROUGHPUT_BENCHMARK_LANE,
     }
     _write_json(artifact_dir / "manifest.json", manifest)
     _write_json(artifact_dir / "results.json", summary_payload)

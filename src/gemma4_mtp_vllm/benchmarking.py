@@ -63,6 +63,7 @@ class BenchmarkSummary:
     output_token_target: int
     num_speculative_tokens: int
     observations: list[BenchmarkObservation]
+    benchmark_lane: str = "throughput_fixed_length"
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)

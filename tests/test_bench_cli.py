@@ -169,6 +169,7 @@ def test_bench_command_emits_summary(monkeypatch, tmp_path):
     body = json.loads(out.read_text())
     serialized = json.dumps(body)
     assert body["profile"] == "safe80"
+    assert body["benchmark_lane"] == "throughput_fixed_length"
     assert body["output_token_target"] == 8
     assert len(body["observations"]) == 2
     assert body["statistics"]["speedup"]["median"] == pytest.approx(2.0)
@@ -965,6 +966,7 @@ def test_bench_command_writes_v3_artifact_directory(monkeypatch, tmp_path):
     serialized = json.dumps(results)
 
     assert manifest["benchmark_protocol_version"] == 3
+    assert manifest["benchmark_lane"] == "throughput_fixed_length"
     assert manifest["package_version"] == "0.2.0a1"
     assert manifest["runtime_manifest_source"] == "provided"
     assert str(runtime_manifest) not in json.dumps(manifest)
@@ -974,8 +976,80 @@ def test_bench_command_writes_v3_artifact_directory(monkeypatch, tmp_path):
         "baseline": "http://baseline:8000",
     }
     assert request_payloads["chat_completion"]["stream"] is True
+    assert request_payloads["chat_completion"]["ignore_eos"] is True
+    assert request_payloads["chat_completion"]["min_tokens"] == 8
     assert results["statistics"]["mtp"]["e2e_output_tokens_per_second"]["median"] == 20.0
+    assert results["benchmark_lane"] == "throughput_fixed_length"
     assert "generation_tps" not in serialized
+
+
+def test_bench_quality_writes_natural_eos_report_under_mock_transport(
+    monkeypatch,
+    tmp_path,
+):
+    captured_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "42"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+
+    out = tmp_path / "quality.json"
+    result = runner.invoke(
+        app,
+        [
+            "bench-quality",
+            "--url",
+            "http://quality:8000",
+            "--profile",
+            "safe80",
+            "--json-output",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+    assert payload["benchmark_lane"] == "quality_natural_eos"
+    assert payload["benchmark_kind"] == "single_endpoint_quality"
+    assert payload["request_contract"] == {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "seed": 1,
+        "ignore_eos": False,
+        "min_tokens": "absent",
+        "stream": False,
+        "max_tokens": "task_realistic",
+    }
+    assert payload["suite_category_counts"]["coding_python_unit"] == 10
+    assert payload["suite_category_counts"]["structured_json"] == 10
+    assert payload["suite_category_counts"]["multi_turn_history_sensitive"] == 5
+    assert len(payload["task_results"]) == sum(payload["suite_category_counts"].values())
+    assert "e2e_output_tokens_per_second" not in serialized
+    assert "decode_throughput" not in serialized
+    assert captured_bodies
+    assert all(body["stream"] is False for body in captured_bodies)
+    assert all(body["ignore_eos"] is False for body in captured_bodies)
+    assert all("min_tokens" not in body for body in captured_bodies)
+    assert all(body["temperature"] == 0.0 for body in captured_bodies)
+    assert all(body["top_p"] == 1.0 for body in captured_bodies)
+    assert all(body["seed"] == 1 for body in captured_bodies)
 
 
 def test_bench_matrix_iterates_prompts_and_n(monkeypatch, tmp_path):
@@ -1019,6 +1093,7 @@ def test_bench_matrix_iterates_prompts_and_n(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.stdout
     payload = json.loads(out.read_text())
     assert len(payload) == 4
+    assert all(entry["benchmark_lane"] == "throughput_fixed_length" for entry in payload)
     keys = {(entry["prompt"], entry["num_speculative_tokens"]) for entry in payload}
     assert keys == {("alpha", 2), ("alpha", 4), ("beta", 2), ("beta", 4)}
     assert all("generation_tps" not in json.dumps(entry) for entry in payload)
@@ -1145,6 +1220,7 @@ def test_bench_single_records_runtime_endpoint_evidence(monkeypatch, tmp_path):
     serialized = json.dumps(payload)
     observation = payload["groups"][0]["observations"][0]
     assert payload["benchmark_protocol_version"] == 3
+    assert payload["benchmark_lane"] == "throughput_fixed_length"
     assert payload["benchmark_kind"] == "single_endpoint_runtime"
     assert payload["status"] == "complete"
     assert payload["label"] == "eager_true"
@@ -1152,6 +1228,7 @@ def test_bench_single_records_runtime_endpoint_evidence(monkeypatch, tmp_path):
     assert payload["groups"][0]["output_token_target"] == 8
     assert payload["groups"][0]["request_body"]["stream"] is True
     assert payload["groups"][0]["request_body"]["min_tokens"] == 8
+    assert payload["groups"][0]["request_body"]["ignore_eos"] is True
     assert observation["result"]["e2e_output_tokens_per_second"] == 20.0
     assert observation["output_sha256"]
     assert observation["output_token_ids"] == [ord(char) for char in "response"]
