@@ -1243,6 +1243,11 @@ def bench_single(
     warmup_runs: int = typer.Option(2, "--warmup-runs"),
     json_output: Optional[str] = typer.Option(None, "--json-output"),
     capture_raw_stream: bool = typer.Option(False, "--capture-raw-stream"),
+    enable_mtp: bool = typer.Option(True, "--enable-mtp/--no-mtp"),
+    runtime_manifest_path: Optional[Path] = typer.Option(
+        None,
+        "--runtime-manifest-path",
+    ),
 ) -> None:
     """Measure one runtime endpoint for sequential A/B experiments."""
     if not prompt:
@@ -1264,6 +1269,7 @@ def bench_single(
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
     selected = resolve_profile(profile, _profile_set())
+    runtime_manifest = _load_runtime_manifest(runtime_manifest_path)
     groups: list[dict[str, object]] = []
     payload = {
         "benchmark_protocol_version": BENCHMARK_PROTOCOL_VERSION,
@@ -1272,8 +1278,15 @@ def bench_single(
         "label": label,
         "profile": selected.name,
         "service_url": url,
+        "configuration": _bench_single_configuration(
+            selected,
+            enable_mtp=enable_mtp,
+            runtime_manifest=runtime_manifest,
+        ),
         "groups": groups,
     }
+    if runtime_manifest:
+        payload["launch_manifest"] = runtime_manifest
 
     async def run_groups() -> None:
         async with BenchmarkClientPool() as pool:
@@ -1356,6 +1369,26 @@ def _benchmark_failure_evidence(
         ),
         "response": _benchmark_failure_response_evidence(response),
     }
+
+
+def _bench_single_configuration(
+    profile: ModelProfile,
+    *,
+    enable_mtp: bool,
+    runtime_manifest: dict[str, object],
+) -> dict[str, object]:
+    configuration: dict[str, object] = {
+        "profile": profile.name,
+        "enforce_eager": profile.enforce_eager,
+        "enable_mtp": enable_mtp,
+    }
+    argv = runtime_manifest.get("argv")
+    if isinstance(argv, list) and all(isinstance(item, str) for item in argv):
+        configuration["argv"] = list(argv)
+    comparable_manifest = _p0_004_comparable_configuration_fields(runtime_manifest)
+    if comparable_manifest:
+        configuration["runtime_manifest"] = comparable_manifest
+    return configuration
 
 
 def _benchmark_failure_response_evidence(response: object) -> dict[str, object] | None:
@@ -1851,30 +1884,13 @@ def _p0_004_pair_group_report(
     right_group: dict[str, object],
 ) -> dict[str, object]:
     token_parity = _group_token_parity(left_group, right_group)
-    left_observation = _first_group_observation(left_group)
-    right_observation = _first_group_observation(right_group)
-    left_tokens = _raw_tokens_from_observation(left_observation)
-    right_tokens = _raw_tokens_from_observation(right_observation)
-    if left_tokens is not None and right_tokens is not None:
-        token_diagnostics = _token_sequence_diagnostics(left_tokens, right_tokens)
-    else:
-        token_diagnostics = {
-            "exact_match": False,
-            "control_length": None,
-            "candidate_length": None,
-            "output_length_equal": None,
-            "longest_common_prefix_tokens": None,
-            "first_divergence_position_0_based": None,
-            "matching_token_percentage_same_position_over_max_len": None,
-        }
-
-    left_text = _observation_visible_text(left_observation)
-    right_text = _observation_visible_text(right_observation)
-    left_normalized = _normalize_final_text(left_text)
-    right_normalized = _normalize_final_text(right_text)
-    left_finish_reason = _observation_finish_reason(left_observation)
-    right_finish_reason = _observation_finish_reason(right_observation)
-    validator_equal = _task_validator_equal(left_observation, right_observation)
+    observation_diagnostics = _p0_004_pair_observation_diagnostics(
+        left_group,
+        right_group,
+    )
+    token_diagnostics = _p0_004_representative_observation_diagnostic(
+        observation_diagnostics,
+    )
 
     return {
         "group_key": key,
@@ -1894,16 +1910,108 @@ def _p0_004_pair_group_report(
         "matching_token_percentage_same_position_over_max_len": token_diagnostics[
             "matching_token_percentage_same_position_over_max_len"
         ],
-        "normalized_final_text_equal": left_normalized == right_normalized,
-        "final_text_edit_distance": _edit_distance(left_normalized, right_normalized),
-        "finish_reason_equal": left_finish_reason == right_finish_reason,
-        "task_validator_equal": validator_equal,
+        "normalized_final_text_equal": _all_observation_bool(
+            observation_diagnostics,
+            "normalized_final_text_equal",
+        ),
+        "final_text_edit_distance": token_diagnostics["final_text_edit_distance"],
+        "finish_reason_equal": _all_observation_bool(
+            observation_diagnostics,
+            "finish_reason_equal",
+        ),
+        "task_validator_equal": _all_observation_bool(
+            observation_diagnostics,
+            "task_validator_equal",
+        ),
+        "observation_diagnostics": observation_diagnostics,
     }
 
 
-def _first_group_observation(group: dict[str, object]) -> dict[str, object] | None:
-    observations = _group_observations(group)
-    return observations[0] if observations else None
+def _p0_004_pair_observation_diagnostics(
+    left_group: dict[str, object],
+    right_group: dict[str, object],
+) -> list[dict[str, object]]:
+    left_observations = _group_observations(left_group)
+    right_observations = _group_observations(right_group)
+    diagnostics: list[dict[str, object]] = []
+    for index, (left_observation, right_observation) in enumerate(
+        zip(left_observations, right_observations),
+        start=1,
+    ):
+        left_tokens = _raw_tokens_from_observation(left_observation)
+        right_tokens = _raw_tokens_from_observation(right_observation)
+        if left_tokens is not None and right_tokens is not None:
+            token_diagnostics = _token_sequence_diagnostics(left_tokens, right_tokens)
+        else:
+            token_diagnostics = _empty_token_diagnostics()
+        left_text = _observation_visible_text(left_observation)
+        right_text = _observation_visible_text(right_observation)
+        left_normalized = _normalize_final_text(left_text)
+        right_normalized = _normalize_final_text(right_text)
+        left_finish_reason = _observation_finish_reason(left_observation)
+        right_finish_reason = _observation_finish_reason(right_observation)
+        token_diagnostics.update(
+            {
+                "index": index,
+                "left_observation_index": left_observation.get("index"),
+                "right_observation_index": right_observation.get("index"),
+                "raw_token_exact_equal": token_diagnostics["exact_match"],
+                "normalized_final_text_equal": left_normalized == right_normalized,
+                "final_text_edit_distance": _edit_distance(
+                    left_normalized,
+                    right_normalized,
+                ),
+                "finish_reason_equal": left_finish_reason == right_finish_reason,
+                "task_validator_equal": _task_validator_equal(
+                    left_observation,
+                    right_observation,
+                ),
+            }
+        )
+        diagnostics.append(token_diagnostics)
+    return diagnostics
+
+
+def _empty_token_diagnostics() -> dict[str, object]:
+    return {
+        "exact_match": False,
+        "control_length": None,
+        "candidate_length": None,
+        "output_length_equal": None,
+        "longest_common_prefix_tokens": None,
+        "first_divergence_position_0_based": None,
+        "matching_token_percentage_same_position_over_max_len": None,
+    }
+
+
+def _p0_004_representative_observation_diagnostic(
+    diagnostics: list[dict[str, object]],
+) -> dict[str, object]:
+    for diagnostic in diagnostics:
+        if diagnostic.get("raw_token_exact_equal") is False:
+            return diagnostic
+    if diagnostics:
+        return diagnostics[0]
+    empty = _empty_token_diagnostics()
+    empty.update(
+        {
+            "normalized_final_text_equal": None,
+            "final_text_edit_distance": None,
+            "finish_reason_equal": None,
+            "task_validator_equal": None,
+        }
+    )
+    return empty
+
+
+def _all_observation_bool(
+    diagnostics: list[dict[str, object]],
+    key: str,
+) -> bool | None:
+    values = [diagnostic.get(key) for diagnostic in diagnostics]
+    if not values or all(value is None for value in values):
+        return None
+    return all(value is True for value in values)
 
 
 def _raw_tokens_from_observation(

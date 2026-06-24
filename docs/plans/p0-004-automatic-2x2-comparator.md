@@ -38,6 +38,12 @@ Eksik configuration invalid experiment sayilir. `argv` varsa
 `--enforce-eager` ve `--speculative-config` varligi beklenen role gore
 dogrulanir; yanlis argv invalid experiment sayilir.
 
+`bench-single` yeni kanit uretirken top-level `configuration` yazar.
+MTP durumu `--enable-mtp/--no-mtp` ile acikca kaydedilir. A ve C no-MTP
+rolleri `--no-mtp` ile uretilmelidir. `--runtime-manifest-path` verilirse
+sanitized `launch_manifest` de payload'a eklenir ve argv/runtime metadata
+karsilastirmasinda kullanilir.
+
 ## Karsilastirma kurallari
 
 - A/B ve C/D same-execution-mode MTP correctness gate'tir.

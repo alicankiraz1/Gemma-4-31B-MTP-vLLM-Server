@@ -1772,6 +1772,62 @@ def test_bench_2x2_compare_passes_complete_matrix(tmp_path):
     assert ab_group["task_validator_equal"] is True
 
 
+def test_bench_2x2_compare_consumes_bench_single_outputs(monkeypatch, tmp_path):
+    clock = _install_fake_clock(monkeypatch)
+    handler = _make_handler(tps_mtp=20.0, tps_baseline=10.0, clock=clock)
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    role_args = {
+        "a": ("tp2_2x32_fp8_gpuonly", ["--no-mtp"]),
+        "b": ("tp2_2x32_fp8_gpuonly", ["--enable-mtp"]),
+        "c": ("tp2_2x32_fp8_gpuonly_cuda_graph", ["--no-mtp"]),
+        "d": ("tp2_2x32_fp8_gpuonly_cuda_graph", ["--enable-mtp"]),
+    }
+    paths: dict[str, Path] = {}
+    for role, (profile, mtp_args) in role_args.items():
+        out = tmp_path / f"{role}.json"
+        result = runner.invoke(
+            app,
+            [
+                "bench-single",
+                "--url",
+                f"http://{role}:8000",
+                "--label",
+                role.upper(),
+                "--profile",
+                profile,
+                "--prompt",
+                "alpha",
+                "--output-token-target",
+                "64",
+                "--runs",
+                "1",
+                "--warmup-runs",
+                "0",
+                "--json-output",
+                str(out),
+                *mtp_args,
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+        paths[role] = out
+
+    a_payload = json.loads(paths["a"].read_text())
+    d_payload = json.loads(paths["d"].read_text())
+    assert a_payload["configuration"]["enable_mtp"] is False
+    assert d_payload["configuration"]["profile"] == "tp2_2x32_fp8_gpuonly_cuda_graph"
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "passed"
+    assert payload["failure_reasons"] == []
+
+
 def test_bench_2x2_compare_rejects_same_mode_mtp_failure(tmp_path):
     paths = _write_2x2_inputs(
         tmp_path,
@@ -1790,6 +1846,28 @@ def test_bench_2x2_compare_rejects_same_mode_mtp_failure(tmp_path):
     assert ab_pair["gate_passed"] is False
     assert ab_pair["groups"][0]["raw_token_exact_equal"] is False
     assert ab_pair["groups"][0]["first_divergence_position_0_based"] == 1
+
+
+def test_bench_2x2_compare_reports_later_repeat_divergence(tmp_path):
+    b_payload = _bench_2x2_payload(role="B", token_ids=[1, 2, 3])
+    b_payload["groups"][0]["observations"][1]["output_token_ids"] = [1, 9, 3]
+    paths = _write_2x2_inputs(tmp_path, b=b_payload)
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "failed"
+    ab_group = _find_pair(payload, "A", "B")["groups"][0]
+    assert ab_group["raw_token_exact_equal"] is False
+    assert ab_group["first_divergence_position_0_based"] == 1
+    assert ab_group["longest_common_prefix_tokens"] == 1
+    assert ab_group["observation_diagnostics"][0]["raw_token_exact_equal"] is True
+    assert ab_group["observation_diagnostics"][1]["raw_token_exact_equal"] is False
+    assert (
+        ab_group["observation_diagnostics"][1]["first_divergence_position_0_based"]
+        == 1
+    )
 
 
 def test_bench_2x2_compare_keeps_cross_mode_failure_diagnostic(tmp_path):
