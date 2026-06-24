@@ -7,8 +7,8 @@ This runbook is for the repaired CUDA-graph evidence run. Do not run any command
 - Live backend to restore: `127.0.0.1:8012`
 - Live gateway to restore: `127.0.0.1:18082`
 - Source commit: `a8b55d474bf876f61f9b983d8a151d36633e4be8`
-- Existing evidence to preserve: `/home/homelander/p1-001-maintenance-20260622T202831Z`
-- Repair evidence root: `/home/homelander/p1-001r-repair-20260623T005647Z`
+- Existing evidence to preserve: `<operator-evidence-root>/p1-001-maintenance-20260622T202831Z`
+- Repair evidence root: `<operator-evidence-root>/p1-001r-repair-20260623T005647Z`
 - Live default profile must not change.
 - `change_default_profile` must remain `false`.
 
