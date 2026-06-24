@@ -4,7 +4,7 @@
 
 - Branch: `codex/p0-008-p1-001r-code-gate`
 - Audited base commit before the report-only gate commit: `01dc54a93cc46d2513b40acd4a268b22d0c1f6bf`
-- Final branch HEAD: record `git rev-parse HEAD` after this report is committed
+- Final branch HEAD: record `git rev-parse HEAD` after the last report/runbook commit
 - Final source archive path: `/tmp/gemma4-mtp-src-<final-short-head>.zip`
 - Live backend stop/start: not run
 - GPU-consuming commands: not run
@@ -21,8 +21,9 @@ All checks were run from `<repo-root>`.
 | `.venv/bin/python -m pip check` | `No broken requirements found.` |
 | `git diff --check` | passed |
 | `scripts/verify_wheel_freshness.sh` | built `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`; installed-wheel smoke passed |
-| `scripts/make_source_archive.sh /tmp/gemma4-mtp-src-01dc54a.zip` | passed before adding this report; rerun after report commit with `<final-short-head>` |
-| `scripts/verify_source_archive.sh /tmp/gemma4-mtp-src-01dc54a.zip` | `archive clean` before adding this report; rerun after report commit with `<final-short-head>` |
+| `scripts/make_source_archive.sh /tmp/gemma4-mtp-src-<final-short-head>.zip` | must pass after the last report/runbook commit |
+| `scripts/verify_source_archive.sh /tmp/gemma4-mtp-src-<final-short-head>.zip` | must pass after the last report/runbook commit |
+| `git bundle create /tmp/gemma4-mtp-p0-008-<final-short-head>.bundle HEAD && git bundle verify /tmp/gemma4-mtp-p0-008-<final-short-head>.bundle` | must pass after the last report/runbook commit |
 
 P0-007 reviewer approval at `7d5446786fe2c0347dd7d464d11bbe5d4f7c5357` covered:
 
