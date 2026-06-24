@@ -196,6 +196,44 @@ async def test_doctor_reports_observed_config_and_mtp_metric_separately():
 
 
 @pytest.mark.asyncio
+async def test_doctor_reports_cuda_graph_observation_from_metrics():
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    "vllm_cuda_graph_dispatch_total 7\n"
+                    "vllm_cuda_graph_capture_duration_seconds_sum 0.5\n"
+                ),
+            )
+        return httpx.Response(404)
+
+    report = await build_report(
+        profile=resolve_profile(
+            "tp2_2x32_fp8_gpuonly_cuda_graph",
+            load_profiles(),
+        ),
+        vllm_base_url="http://vllm.local:8000",
+        transport=httpx.MockTransport(handler),
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    assert "enforce_eager" not in report["observed_config"]
+    assert report["observed_config"]["cuda_graph"]["graph_active"] is True
+    assert report["observed_config"]["cuda_graph"]["graph_dispatch_count"] == 7.0
+    assert report["observed_config"]["cuda_graph_observed"] is True
+
+
+@pytest.mark.asyncio
 async def test_doctor_verifies_runtime_fields_from_active_manifest(tmp_path):
     profile = resolve_profile("tp2_2x32_fp8_gpuonly", load_profiles())
     argv = [

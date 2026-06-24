@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from gemma4_mtp_vllm import REQUIRED_VLLM_MIN_VERSION
+from gemma4_mtp_vllm.graph_observation import parse_cuda_graph_observation
 from gemma4_mtp_vllm.mtp_metrics import parse_mtp_metrics
 from gemma4_mtp_vllm.profiles import ModelProfile
 from gemma4_mtp_vllm.versioning import version_at_least
@@ -154,14 +155,23 @@ def observed_config_from_metrics(
     metrics_text: str,
     *,
     model_name: str | None = None,
+    log_text: str = "",
 ) -> dict[str, Any]:
     mtp = parse_mtp_metrics(metrics_text, model_name=model_name)
+    cuda_graph = parse_cuda_graph_observation(
+        metrics_text=metrics_text,
+        log_text=log_text,
+    )
     return {
         "mtp": mtp,
         "mtp_observed": mtp.get("state") == "active",
+        "cuda_graph": cuda_graph,
+        "cuda_graph_observed": cuda_graph.get("graph_active"),
         "_sources": {
             "mtp": "vllm_metrics",
             "mtp_observed": "vllm_metrics",
+            "cuda_graph": "vllm_metrics",
+            "cuda_graph_observed": "vllm_metrics",
         },
     }
 

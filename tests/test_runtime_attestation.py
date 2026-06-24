@@ -12,6 +12,7 @@ from gemma4_mtp_vllm.runtime_config import (
     observed_config_from_active_manifest,
     observed_config_from_runtime_evidence,
     observed_config_from_models,
+    observed_config_from_metrics,
     observed_config_from_process_argv,
     redact_argv,
 )
@@ -305,3 +306,49 @@ def test_process_argv_redacts_private_model_paths_in_observed_fields():
     assert observed["drafter_model"] == "REDACTED_PATH"
     assert target_path not in " ".join(observed["runtime_argv"])
     assert drafter_path not in " ".join(observed["runtime_argv"])
+
+
+def test_metrics_runtime_observation_includes_cuda_graph_evidence():
+    observed = observed_config_from_metrics(
+        """
+vllm:spec_decode_num_draft_tokens_total 8
+vllm_cuda_graph_dispatch_total 5
+vllm_cuda_graph_capture_total 1
+vllm_cuda_graph_capture_duration_seconds_sum 0.75
+""",
+        model_name="gemma-4-31b-mtp",
+    )
+
+    assert observed["cuda_graph"] == {
+        "graph_metrics_registered": True,
+        "graph_capture_observed": True,
+        "graph_dispatch_observed": True,
+        "eager_fallback_observed": False,
+        "graph_dispatch_count": 5.0,
+        "graph_capture_duration_seconds": 0.75,
+        "graph_capture_sizes": [],
+        "graph_evidence_status": "observed",
+        "graph_active": True,
+        "evidence_sources": ["metrics"],
+    }
+    assert observed["cuda_graph_observed"] is True
+
+
+def test_cuda_graph_not_inferred_from_enforce_eager_false():
+    observed = merge_observed_config(
+        observed_config_from_process_argv(
+            [
+                "vllm",
+                "serve",
+                "google/gemma-4-31B-it",
+                "--served-model-name",
+                "gemma-4-31b-mtp",
+            ]
+        ),
+        observed_config_from_metrics("", model_name="gemma-4-31b-mtp"),
+    )
+
+    assert observed["enforce_eager"] is False
+    assert observed["cuda_graph"]["graph_evidence_status"] == "unavailable"
+    assert observed["cuda_graph"]["graph_active"] is None
+    assert observed["cuda_graph_observed"] is None
