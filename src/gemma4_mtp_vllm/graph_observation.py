@@ -18,8 +18,12 @@ GRAPH_CAPTURE_FINISHED_RE = re.compile(
     r"(?i)(?:graph|cuda\s*graph|cudagraph).{0,80}captur(?:e|ing)?\s+finished"
 )
 GRAPH_NEGATIVE_CAPTURE_RE = re.compile(
-    r"(?i)(?:skip(?:ping|ped)?|disable(?:d)?|not enabled|without).{0,80}"
-    r"(?:cuda\s*graph|cudagraph|graph).{0,80}captur"
+    r"(?i)(?:"
+    r"(?:skip(?:ping|ped)?|disable(?:d)?|not enabled|without).{0,80}"
+    r"(?:cuda\s*graph|cudagraph|graph).{0,80}captur|"
+    r"(?:cuda\s*graph|cudagraph|graph).{0,80}captur.{0,80}"
+    r"(?:skip(?:ping|ped)?|disable(?:d)?|not enabled|without)"
+    r")"
 )
 GRAPH_DISPATCH_RE = re.compile(
     r"(?i)(?:cuda\s*graph|cudagraph).{0,80}(?:dispatch|replay)"

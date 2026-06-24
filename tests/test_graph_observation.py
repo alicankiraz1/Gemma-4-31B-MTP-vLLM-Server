@@ -55,7 +55,14 @@ def test_cuda_graph_observation_detects_fallback_without_active():
 
 
 def test_cuda_graph_observation_does_not_mark_skipped_capture_active():
-    logs = "WARNING Skipping CUDA graph capture. CUDAGraph mode is disabled."
+    logs = "\n".join(
+        [
+            "WARNING Skipping CUDA graph capture. CUDAGraph mode is disabled.",
+            "WARNING CUDA graph capture is disabled.",
+            "WARNING CUDA graph capture not enabled.",
+            "WARNING CUDA graph capture skipped.",
+        ]
+    )
 
     observation = parse_cuda_graph_observation(metrics_text="", log_text=logs)
 
