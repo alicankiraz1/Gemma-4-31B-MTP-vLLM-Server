@@ -84,6 +84,47 @@ def test_cuda_graph_observation_detects_capture_finished_duration_from_logs():
     assert observation["evidence_sources"] == ["logs"]
 
 
+def test_cuda_graph_observation_parses_vllm_cudagraph_logging_table():
+    logs = """
+**CUDAGraph Config Settings:**
+
+- Mode: FULL
+- Capture sizes: [1, 2, 4]
+
+**CUDAGraph Stats:**
+
+| Unpadded Tokens | Padded Tokens | Num Paddings | Runtime Mode | Count |
+|-----------------|---------------|--------------|--------------|-------|
+| 16              | 32            | 16           | FULL         | 7     |
+| 8               | 8             | 0            | NONE         | 3     |
+"""
+
+    observation = parse_cuda_graph_observation(metrics_text="", log_text=logs)
+
+    assert observation["graph_capture_observed"] is False
+    assert observation["graph_dispatch_observed"] is True
+    assert observation["graph_dispatch_count"] == 7.0
+    assert observation["graph_capture_sizes"] == [1, 2, 4]
+    assert observation["graph_evidence_status"] == "observed"
+    assert observation["graph_active"] is True
+    assert observation["evidence_sources"] == ["logs"]
+
+
+def test_cuda_graph_observation_keeps_later_capture_after_earlier_disabled_tail():
+    logs = """
+WARNING CUDA graph capture is disabled.
+INFO Graph capturing finished in 5.5 secs, took 1.5 GiB
+"""
+
+    observation = parse_cuda_graph_observation(metrics_text="", log_text=logs)
+
+    assert observation["graph_capture_observed"] is True
+    assert observation["eager_fallback_observed"] is True
+    assert observation["graph_capture_duration_seconds"] == 5.5
+    assert observation["graph_evidence_status"] == "observed_with_fallback"
+    assert observation["graph_active"] is True
+
+
 def test_cuda_graph_observation_detects_metric_fallback_and_registered_idle():
     fallback = parse_cuda_graph_observation(
         metrics_text="vllm_cuda_graph_fallback_total 2\n",
