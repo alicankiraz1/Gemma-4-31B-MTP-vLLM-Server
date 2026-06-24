@@ -61,9 +61,9 @@ Compatibility status:
 - Live DGX Spark promotion requires generation smoke, queue drain, NCCL log
   evidence, Ray continuity, soak, rollback proof, and a healthy socket fallback.
 
-The earlier P1-001R repair stream has corrected the benchmark methodology needed
-to decide whether CUDA-graph hybrid can replace the current eager production
-profile. The repo now includes:
+The earlier P1-001R repair stream corrected the benchmark methodology used to
+evaluate whether CUDA-graph hybrid can replace the current eager production
+profile. Those tools remain available:
 
 - persistent benchmark transport and streaming token instrumentation
 - automatic A/B/C/D 2x2 comparison for same-mode MTP correctness
@@ -83,16 +83,10 @@ Current production rollback profile remains:
 - Gateway: private GPU host loopback gateway port
 
 The CUDA-graph candidate is `tp2_2x32_fp8_gpuonly_cuda_graph`, which preserves
-the same runtime settings except `enforce_eager=false`. It is a candidate only:
-it has not been adopted, it is not the default profile, and it must not be
-presented as production-ready until the P1-001R maintenance run collects A/B/C/D
-evidence, same-mode MTP correctness, natural-EOS quality results, graph
-evidence, candidate soak, and rollback validation.
-
-The next operational step is gated on one explicit maintenance authorization
-covering live gateway stop, live backend stop, A/B/C/D one backend at a time,
-candidate sanity soak, live eager backend restore, gateway restore, and
-post-rollback validation. See
+the same runtime settings except `enforce_eager=false`. It is not the default
+profile and must not be presented as production-ready without A/B/C/D evidence,
+same-mode MTP correctness, natural-EOS quality results, graph evidence,
+candidate soak, and rollback validation. See
 [`docs/plans/p1-001r-001-live-baseline.md`](docs/plans/p1-001r-001-live-baseline.md)
 and
 [`docs/plans/p1-001r-002-safe-shutdown-preflight.md`](docs/plans/p1-001r-002-safe-shutdown-preflight.md).
@@ -134,7 +128,7 @@ queueing/prefill/TTFT, and decode time. Do not compare it to a raw engine-only
 
 The 1024-token MTP-only smoke was approximately 19.9 seconds, or about
 51.5 output tok/s. Treat it as a long-request MTP smoke result, not an MTP vs
-no-MTP speedup test unless a paired no-MTP baseline artefact is present.
+no-MTP speedup test unless a paired no-MTP baseline artifact is present.
 
 See
 [`docs/benchmarks/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md`](docs/benchmarks/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md)
@@ -172,7 +166,7 @@ The current public throughput result is the FP8 GPU-only result identified by
 `local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`. It is a direct vLLM
 MTP vs no-MTP speedup test, not a gateway-overhead test. Older unscoped
 throughput numbers have been removed from the README; keep any future numbers
-behind an immutable benchmark ID and artefact bundle.
+behind an immutable benchmark ID and artifact bundle.
 
 The MTP service was restored after the benchmark and left healthy.
 
@@ -225,7 +219,8 @@ an unverified high-memory profile:
 The `tp2` profile is the unverified 2x40GB+ 32K-context target. It is not the
 constrained 2x32GB smoke configuration.
 
-Use `tp2_2x32_smoke` to reproduce the constrained 2x RTX 5090 smoke backend:
+Use `tp2_2x32_smoke` to reproduce the constrained 2x32 GB NVIDIA smoke backend
+used for the published RTX 5090 health check:
 
 - `tensor_parallel_size`: `2`
 - `gpu_memory_utilization`: `0.95`
@@ -237,8 +232,10 @@ Use `tp2_2x32_smoke` to reproduce the constrained 2x RTX 5090 smoke backend:
 - `max_output_tokens`: `1024`
 - `validation_level`: `smoke`
 
-Use `tp2_2x32_fp8_gpuonly` for the all-GPU FP8 experiment on the same host.
-It sets `cpu_offload_gb: 0` and `quantization: fp8`.
+Use `tp2_2x32_fp8_gpuonly` for all-GPU FP8 tensor-parallel launch shapes on
+2x32 GB-class NVIDIA systems. It sets `cpu_offload_gb: 0` and
+`quantization: fp8`; the published benchmark evidence for this profile was
+captured on 2x RTX 5090.
 
 Use `tp2_2x32_fp8_gpuonly_cuda_graph` only for isolated validation. It matches
 `tp2_2x32_fp8_gpuonly` except that eager mode is disabled. Do not make it the
@@ -355,7 +352,7 @@ running `vllm serve` over HTTP.
   accelerator hardware. `vllm-mtp cluster-plan` can run on a non-GPU workstation
   because it only produces dry-run plans.
 - Enough VRAM for the chosen profile (`safe80` needs 80 GB, unverified `tp2`
-  targets 2× 40+ GB, `tp2_2x32_smoke` targets 2× 32 GB with CPU offload).
+  targets 2x 40+ GB, `tp2_2x32_smoke` targets 2x 32 GB with CPU offload).
 
 ### 1. Clone the repository
 
@@ -447,7 +444,6 @@ vllm-mtp cluster-plan \
     --topology dgx-spark-private \
     --node-count 4 \
     --runtime-id my-runtime-id \
-    --json-output artifacts/cluster-runs/my-runtime-id/plan.json \
     --transport-profile socket \
     --format shell
 ```
@@ -490,22 +486,42 @@ Example JSON shape:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": 1,
   "dry_run_only": true,
   "runtime_id": "my-runtime-id",
   "profile": "tp2_2x32_fp8_gpuonly",
-  "topology": "dgx-spark-private",
+  "topology": {
+    "id": "dgx-spark-private",
+    "label": "Private DGX Spark topology",
+    "head": "spark-01",
+    "nodes": [
+      {"name": "spark-01", "fabric_ip": "198.51.100.1", "gpus": 1},
+      {"name": "spark-02", "fabric_ip": "198.51.100.2", "gpus": 1},
+      {"name": "spark-03", "fabric_ip": "198.51.100.3", "gpus": 1},
+      {"name": "spark-04", "fabric_ip": "198.51.100.4", "gpus": 1}
+    ]
+  },
   "node_count": 4,
+  "tensor_parallel_size": 4,
   "transport_profile": "socket",
   "commands": [
-    {"type": "ray-head", "host": "host-1", "shell": "..."},
-    {"type": "ray-worker", "host": "host-2", "shell": "..."},
-    {"type": "vllm-serve", "host": "host-1", "shell": "..."}
+    {"target": "spark-01", "role": "ray-head", "rank": 0, "command": "..."},
+    {"target": "spark-02", "role": "ray-worker", "rank": 1, "command": "..."},
+    {"target": "spark-01", "role": "vllm-serve", "rank": 0, "command": "..."}
+  ],
+  "environment": [
+    "NCCL_SOCKET_IFNAME=fabric0",
+    "GLOO_SOCKET_IFNAME=fabric0",
+    "NCCL_IB_DISABLE=1"
   ],
   "resolved_environment_sha256": "...",
   "resolved_command_sha256": "...",
   "dry_run_fingerprint": "...",
-  "expected_live_gates": ["generation_smoke", "queue_drain", "ray_continuity"]
+  "expected_live_gates": [
+    "operator_approval_before_execute",
+    "dry_run_fingerprint_matches_target_topology",
+    "generation_smoke_exact_pong"
+  ]
 }
 ```
 
@@ -552,7 +568,7 @@ field-level `verified`, `mismatch`, `unknown`, or `not_applicable` statuses.
 connectivity alone does not prove the backend was launched with the selected
 profile or MTP path.
 `mtp_observed` is derived from parsed vLLM speculative decoding counters, not
-from metric names alone. Benchmark artefacts include before/after metric
+from metric names alone. Benchmark artifacts include before/after metric
 snapshots and deltas; treat those deltas as endpoint-local evidence for the run
 window, not proof that no concurrent traffic contributed to process counters.
 
@@ -567,7 +583,7 @@ processes before running a speedup benchmark.
 
 Example FP8 GPU-only reproduction for
 `local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`:
-Use the immutable artefact flag
+Use the immutable artifact flag
 `--artifact-id local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0` when
 sharing generated benchmark evidence.
 
@@ -798,56 +814,25 @@ shape using a fake vLLM transport.
 
 ## Verification
 
+Recommended code/documentation gate for this checkout:
+
 ```bash
 python -m pytest -q
+python -m compileall -q src tests
 python -m pip check
-python -m compileall -q src
-python -m build --wheel
+git diff --check
 ```
 
-### Local Verification (2026-05-17)
+Release artifact checks:
 
-- `python -m pytest -q` -> `218 passed`
-- `python -m pip check` → `No broken requirements found.`
-- `python -m compileall -q src` → no errors
-- `python -m build --wheel` → built `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
-- `scripts/verify_wheel_freshness.sh` → `wheel smoke ok`
-- `scripts/make_source_archive.sh` + `scripts/verify_source_archive.sh` → archive clean
+```bash
+python -m build --wheel
+scripts/verify_wheel_freshness.sh
+scripts/make_source_archive.sh dist/Gemma-4-31B-MTP-vllm-src.zip
+scripts/verify_source_archive.sh dist/Gemma-4-31B-MTP-vllm-src.zip
+```
 
-218 tests cover profiles, server limits, bind policy, errors, runtime state,
-middleware, policy validation, request validation, vLLM HTTP client, Anthropic
-adapter, server app foundation, health, metrics, OpenAI endpoints, Anthropic
-endpoints, doctor, benchmarking, launch helper, CLI, bench CLI, versioning, and
-release scripts.
-
-### P0-004 Local Verification (2026-06-22)
-
-- `python -m pytest -q` -> `243 passed`
-- `python -m pip check` → `No broken requirements found.`
-- `python -m compileall -q src` → no errors
-- `git diff --check` → no errors
-- secret and local-path scan → clean
-
-243 tests cover the prior release surface plus readiness state-machine behavior,
-MTP per-generation delta evidence, and streaming slot lifecycle regressions.
-
-### P1-001R Code Gate Verification (2026-06-25)
-
-- `.venv/bin/python -m pytest -q` -> `374 passed, 144 warnings`
-- `.venv/bin/python -m compileall -q src tests` -> no errors
-- `.venv/bin/python -m pip check` -> `No broken requirements found.`
-- `git diff --check` -> no errors
-- wheel freshness smoke -> built and installed
-  `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
-- source archive verification -> clean
-- git bundle verification -> clean
-
-374 tests cover the prior release surface plus P0-001 evidence audit, persistent
-benchmark transport, corrected streaming token instrumentation, automatic 2x2
-comparison, throughput and quality lanes, statistical recommendation gates,
-CUDA graph observation, runtime attestation, and release artifact checks.
-
-### P2-001 Cluster Planner Verification (2026-06-25)
+### Latest Recorded Verification (2026-06-25)
 
 - `.venv/bin/python -m pytest tests/test_cluster.py tests/test_cli.py::test_cluster_plan_command_prints_shell_safe_dry_run tests/test_cli.py::test_cluster_plan_command_prints_deterministic_json tests/test_cli.py::test_cluster_plan_rejects_invalid_inputs tests/test_release_scripts.py::test_gitignore_covers_private_cluster_topologies tests/test_release_scripts.py::test_public_cluster_topology_example_has_no_private_addresses -q` -> `12 passed`
 - `.venv/bin/python -m pytest tests/test_cluster.py tests/test_profiles.py tests/test_launch.py tests/test_cli.py tests/test_release_scripts.py -q` -> `65 passed`
@@ -860,6 +845,11 @@ CUDA graph observation, runtime attestation, and release artifact checks.
 socket/RoCE-A transport environment generation, private topology hygiene,
 deterministic shell/JSON output, dry-run fingerprints, and CLI rejection paths
 for invalid cluster inputs.
+
+Historical verification snapshots remain in the plan documents for older
+milestones (`218 passed` on 2026-05-17, `243 passed` for P0-004, and
+`374 passed` for P1-001R). Treat the latest recorded gate above as the current
+README-facing verification baseline.
 
 ## Operational Notes
 
