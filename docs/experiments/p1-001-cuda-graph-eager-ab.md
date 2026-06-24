@@ -10,7 +10,7 @@ Record the current live state:
 ```bash
 vllm-mtp doctor \
     --profile tp2_2x32_fp8_gpuonly \
-    --vllm-base-url http://127.0.0.1:8012
+    --vllm-base-url "$LIVE_BACKEND_URL"
 
 nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.free,utilization.gpu \
     --format=csv
@@ -36,7 +36,7 @@ operator-approved service command, then verify the experiment has exclusive GPU
 capacity:
 
 ```bash
-ss -ltnp | grep -E ':(8012|18082|8101|8102)' || true
+ss -ltnp | grep -E ":($LIVE_BACKEND_PORT|$LIVE_GATEWAY_PORT|8101|8102)" || true
 nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.free,utilization.gpu \
     --format=csv
 ```

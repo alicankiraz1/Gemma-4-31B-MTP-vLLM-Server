@@ -75,7 +75,7 @@ def test_models_endpoint_returns_aliases():
 
 
 def test_models_endpoint_redacts_private_alias():
-    private_alias = "/" + "home" + "/homelander/private-alias"
+    private_alias = "/" + "home" + "/private-user/private-alias"
     client = TestClient(
         create_app(
             api_key="secret",
@@ -491,7 +491,7 @@ def test_chat_completion_drops_assistant_text_block_reasoning_fields():
 
 
 def test_chat_completion_redacts_private_upstream_model_echo():
-    private_alias = "/" + "home" + "/homelander/private-alias"
+    private_alias = "/" + "home" + "/private-user/private-alias"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/chat/completions":
@@ -1171,7 +1171,7 @@ def test_completions_endpoint():
 
 
 def test_completions_endpoint_redacts_private_upstream_model_echo():
-    private_alias = "/" + "home" + "/homelander/private-alias"
+    private_alias = "/" + "home" + "/private-user/private-alias"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/completions":

@@ -122,8 +122,8 @@ def test_profile_only_quantization_is_unknown_not_verified():
 def test_desired_config_redacts_private_profile_paths():
     profile = replace(
         _fp8_profile(),
-        target="/" + "home" + "/homelander/private-target",
-        drafter="/" + "Users" + "/alicankiraz/private-drafter",
+        target="/" + "home" + "/private-user/private-target",
+        drafter="/" + "Users" + "/private-user/private-drafter",
     )
 
     desired = desired_config(profile, served_model_name="gemma-4-31b-mtp")
@@ -141,7 +141,7 @@ def test_desired_config_redacts_private_profile_paths():
 
 
 def test_models_api_redacts_private_model_ids():
-    target_path = "/" + "home" + "/homelander/private-target"
+    target_path = "/" + "home" + "/private-user/private-target"
     observed = observed_config_from_models(
         {"data": [{"id": target_path, "max_model_len": 2048}]},
         target_model=target_path,
@@ -205,7 +205,7 @@ def test_active_manifest_requires_matching_pid_and_redacts_argv():
 def test_active_manifest_rejects_different_private_path_with_fingerprint():
     manifest_argv = _fp8_argv()
     process_argv = [
-        value.replace("google/gemma-4-31B-it", "/" + "home" + "/homelander/other-target")
+        value.replace("google/gemma-4-31B-it", "/" + "home" + "/private-user/other-target")
         for value in manifest_argv
     ]
     manifest = {
@@ -228,7 +228,7 @@ def test_runtime_evidence_requires_backend_port_match():
         runtime_manifest=manifest,
         active_backend_pid=123,
         active_backend_argv=_fp8_argv(),
-        vllm_base_url="http://vllm.local:8012",
+        vllm_base_url="http://vllm.local:8000",
     )
 
     assert observed == {}
@@ -268,8 +268,8 @@ def test_redact_argv_handles_inline_secret_values():
 
 def test_redact_argv_hides_private_paths():
     assert redact_argv([
-        "/" + "home" + "/homelander/env/bin/vllm",
-        "--model-cache=" + "/" + "Users" + "/alicankiraz/cache",
+        "/" + "home" + "/private-user/env/bin/vllm",
+        "--model-cache=" + "/" + "Users" + "/private-user/cache",
     ]) == [
         "REDACTED_PATH",
         "--model-cache=REDACTED_PATH",
@@ -277,7 +277,7 @@ def test_redact_argv_hides_private_paths():
 
 
 def test_redact_argv_hides_private_paths_inside_json_values():
-    path = "/" + "home" + "/homelander/private-drafter"
+    path = "/" + "home" + "/private-user/private-drafter"
     assert redact_argv(["--speculative-config", f'{{"model":"{path}"}}']) == [
         "--speculative-config",
         '{"model":"REDACTED_PATH"}',
@@ -285,7 +285,7 @@ def test_redact_argv_hides_private_paths_inside_json_values():
 
 
 def test_redact_argv_hides_private_paths_with_spaces_inside_json_values():
-    path = "/" + "home" + "/homelander/Model With Spaces/drafter"
+    path = "/" + "home" + "/private-user/Model With Spaces/drafter"
     assert redact_argv(["--speculative-config", f'{{"model":"{path}"}}']) == [
         "--speculative-config",
         '{"model":"REDACTED_PATH"}',
@@ -293,8 +293,8 @@ def test_redact_argv_hides_private_paths_with_spaces_inside_json_values():
 
 
 def test_process_argv_redacts_private_model_paths_in_observed_fields():
-    target_path = "/" + "home" + "/homelander/target"
-    drafter_path = "/" + "Users" + "/alicankiraz/drafter"
+    target_path = "/" + "home" + "/private-user/target"
+    drafter_path = "/" + "Users" + "/private-user/drafter"
     observed = observed_config_from_process_argv([
         "vllm",
         "serve",

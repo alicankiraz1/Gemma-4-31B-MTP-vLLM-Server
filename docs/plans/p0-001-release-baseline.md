@@ -2,7 +2,7 @@
 
 ## Scope
 
-Make the current FP8 GPU-only Homelander implementation represented by a
+Make the current FP8 GPU-only local validation implementation represented by a
 clean, versioned Git state before deeper runtime attestation work begins.
 
 ## Required Changes

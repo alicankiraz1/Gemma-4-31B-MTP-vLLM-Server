@@ -4,13 +4,13 @@ This runbook is for the repaired CUDA-graph evidence run. Do not run any command
 
 ## Scope
 
-- Live backend to restore: `127.0.0.1:8012`
-- Live gateway to restore: `127.0.0.1:18082`
+- Live backend to restore: private loopback backend port
+- Live gateway to restore: private loopback gateway port
 - Source branch: `codex/p0-008-p1-001r-code-gate`
 - Source commit: record `git rev-parse HEAD` after applying the P0-008 gate commit
 - Audited base commit before the report-only gate commit: `01dc54a93cc46d2513b40acd4a268b22d0c1f6bf`
-- Existing evidence to preserve: `<operator-evidence-root>/p1-001-maintenance-20260622T202831Z`
-- Repair evidence root: `<operator-evidence-root>/p1-001r-repair-20260623T005647Z`
+- Existing evidence to preserve: `<operator-evidence-root>/<existing-maintenance-evidence-id>`
+- Repair evidence root: `<operator-evidence-root>/<repair-evidence-id>`
 - Live default profile must not change.
 - `change_default_profile` must remain `false`.
 
@@ -21,13 +21,13 @@ Before touching the live processes, record:
 ```bash
 git rev-parse HEAD
 git status --short
-ss -H -ltnp 'sport = :8012' || true
-ss -H -ltnp 'sport = :18082' || true
+ss -H -ltnp "sport = :$LIVE_BACKEND_PORT" || true
+ss -H -ltnp "sport = :$LIVE_GATEWAY_PORT" || true
 nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory --format=csv
 nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.free,memory.total,utilization.gpu --format=csv
 .venv/bin/vllm-mtp doctor \
   --profile tp2_2x32_fp8_gpuonly \
-  --vllm-base-url http://127.0.0.1:8012 \
+  --vllm-base-url "$LIVE_BACKEND_URL" \
   --runtime-manifest-path logs/p1-001/live-runtime-manifest.json
 ```
 
@@ -37,8 +37,8 @@ Abort if any important GPU process other than the live vLLM workers is present.
 
 Stop only the captured live gateway PID and backend PID. Do not use `pkill -f`,
 reboot, package upgrades, site-packages patches, or profile edits. Verify
-`8012`, `18082`, `8111`, `8112`, `8113`, and `8114` are closed before starting
-the matrix.
+the live backend port, live gateway port, `8111`, `8112`, `8113`, and `8114`
+are closed before starting the matrix.
 
 ## Matrix
 
@@ -150,8 +150,8 @@ acceptance-collapse failures.
 
 After D and the sanity soak, stop D, verify GPU memory is released, restart:
 
-- vLLM backend on `127.0.0.1:8012` with `tp2_2x32_fp8_gpuonly`
-- gateway on `127.0.0.1:18082`
+- vLLM backend on the private loopback backend port with `tp2_2x32_fp8_gpuonly`
+- gateway on the private loopback gateway port
 
 Then verify doctor, `/health`, OpenAI chat, OpenAI streaming, Anthropic messages,
 Anthropic streaming, `/metrics`, and MTP activity. The final report must include

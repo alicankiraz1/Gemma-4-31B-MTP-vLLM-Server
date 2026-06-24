@@ -35,10 +35,10 @@ def test_launch_command_prints_shell_safe_mtp_argv():
     assert spec["method"] == "mtp"
 
 
-def test_launch_command_prints_homelander_smoke_args():
+def test_launch_command_prints_2x32_smoke_args():
     result = runner.invoke(
         app,
-        ["launch", "--profile", "tp2_2x32_smoke", "--port", "8012", "--print-only"],
+        ["launch", "--profile", "tp2_2x32_smoke", "--port", "8000", "--print-only"],
     )
 
     assert result.exit_code == 0

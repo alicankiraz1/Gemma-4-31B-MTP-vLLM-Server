@@ -9,13 +9,13 @@ default/live profili degistirmez.
 
 Bu not P1-001R-001 baseline kanitina baglidir:
 
-- Baseline evidence name: `p1-001r-repair-20260624T220543Z`
-- Latest pointer: `p1-001r-latest-prestop.path`
-- Backend PID at capture: `2809519`
-- Gateway PID at capture: `2811072`
+- Baseline evidence name: private baseline evidence ID
+- Latest pointer: private baseline pointer file
+- Backend PID at capture: captured private PID
+- Gateway PID at capture: captured private PID
 - Active profile: `tp2_2x32_fp8_gpuonly`
-- Backend systemd scope: `session-7041.scope`
-- Gateway systemd scope: `session-7041.scope`
+- Backend systemd scope: captured private session scope
+- Gateway systemd scope: captured private session scope
 - Rollback command artifact: `pre-stop/rollback-commands.redacted.sh`
 - Evidence scan status: `clean`
 
@@ -34,8 +34,8 @@ calistirilabilir:
 
 Bu hazirlik adimi sonunda beklenen durum:
 
-- `127.0.0.1:8012` live backend dinlemeye devam eder.
-- `127.0.0.1:18082` gateway dinlemeye devam eder.
+- live backend private loopback port dinlemeye devam eder.
+- live gateway private loopback port dinlemeye devam eder.
 - GPU'larda yalnizca mevcut live vLLM worker surecleri kalir.
 - Stop komutlari, deney backend'leri ve rollback restore komutlari calistirilmaz.
 
@@ -45,7 +45,7 @@ Operator onayi geldikten sonra ilk is yeni bir shutdown evidence alt dizini
 olusturmak olmalidir:
 
 ```bash
-EVIDENCE="$(cat "$HOME/p1-001r-latest-prestop.path")"
+EVIDENCE="$(cat "$PRIVATE_BASELINE_POINTER")"
 mkdir -p "$EVIDENCE/shutdown"
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$EVIDENCE/shutdown/start-at.txt"
 ```
@@ -53,17 +53,17 @@ date -u +"%Y-%m-%dT%H:%M:%SZ" > "$EVIDENCE/shutdown/start-at.txt"
 Stop oncesi PIDs ve portlar yeniden dogrulanir:
 
 ```bash
-ss -H -ltnp 'sport = :8012' | tee "$EVIDENCE/shutdown/pre-ss-8012.txt"
-ss -H -ltnp 'sport = :18082' | tee "$EVIDENCE/shutdown/pre-ss-18082.txt"
-ps -p 2809519 -o pid=,comm=,stat=,etimes= | tee "$EVIDENCE/shutdown/pre-backend-ps.txt"
-ps -p 2811072 -o pid=,comm=,stat=,etimes= | tee "$EVIDENCE/shutdown/pre-gateway-ps.txt"
+ss -H -ltnp "sport = :$LIVE_BACKEND_PORT" | tee "$EVIDENCE/shutdown/pre-backend-port.txt"
+ss -H -ltnp "sport = :$LIVE_GATEWAY_PORT" | tee "$EVIDENCE/shutdown/pre-gateway-port.txt"
+ps -p "$LIVE_BACKEND_PID" -o pid=,comm=,stat=,etimes= | tee "$EVIDENCE/shutdown/pre-backend-ps.txt"
+ps -p "$LIVE_GATEWAY_PID" -o pid=,comm=,stat=,etimes= | tee "$EVIDENCE/shutdown/pre-gateway-ps.txt"
 nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory --format=csv \
   | tee "$EVIDENCE/shutdown/pre-gpu-compute-apps.csv"
 ```
 
 Abort et ve yeni P1-001R-001 baseline al:
 
-- `8012` veya `18082` dinlemiyorsa
+- live backend veya gateway portu dinlemiyorsa
 - dinleyen PID capture edilen PID ile eslesmiyorsa
 - PID komutu beklenen `vllm` / `vllm-mtp` sureci degilse
 - beklenmeyen ek GPU compute process varsa
@@ -78,19 +78,19 @@ Stop sirasi operator onayi alindiktan ve preflight gectikten sonra hedefli PID
 ile uygulanir. Broad process-kill komutlari kullanilmaz.
 
 ```bash
-kill -TERM 2811072
+kill -TERM "$LIVE_GATEWAY_PID"
 for _ in $(seq 1 30); do
-  ps -p 2811072 >/dev/null || break
+  ps -p "$LIVE_GATEWAY_PID" >/dev/null || break
   sleep 1
 done
-ps -p 2811072 >/dev/null && exit 11
+ps -p "$LIVE_GATEWAY_PID" >/dev/null && exit 11
 
-kill -TERM 2809519
+kill -TERM "$LIVE_BACKEND_PID"
 for _ in $(seq 1 60); do
-  ps -p 2809519 >/dev/null || break
+  ps -p "$LIVE_BACKEND_PID" >/dev/null || break
   sleep 1
 done
-ps -p 2809519 >/dev/null && exit 12
+ps -p "$LIVE_BACKEND_PID" >/dev/null && exit 12
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$EVIDENCE/shutdown/stop-issued-at.txt"
 ```
 
@@ -104,11 +104,11 @@ P1-001R-002 pass sayilmasi icin asagidaki kanitlar ayni shutdown evidence
 dizininde bulunmalidir:
 
 ```bash
-ss -H -ltnp 'sport = :18082' | tee "$EVIDENCE/shutdown/post-ss-18082.txt" || true
-ss -H -ltnp 'sport = :8012' | tee "$EVIDENCE/shutdown/post-ss-8012.txt" || true
-ps -p 2811072 -o pid=,comm=,stat=,etimes= \
+ss -H -ltnp "sport = :$LIVE_GATEWAY_PORT" | tee "$EVIDENCE/shutdown/post-gateway-port.txt" || true
+ss -H -ltnp "sport = :$LIVE_BACKEND_PORT" | tee "$EVIDENCE/shutdown/post-backend-port.txt" || true
+ps -p "$LIVE_GATEWAY_PID" -o pid=,comm=,stat=,etimes= \
   | tee "$EVIDENCE/shutdown/post-gateway-ps.txt" || true
-ps -p 2809519 -o pid=,comm=,stat=,etimes= \
+ps -p "$LIVE_BACKEND_PID" -o pid=,comm=,stat=,etimes= \
   | tee "$EVIDENCE/shutdown/post-backend-ps.txt" || true
 nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory --format=csv \
   | tee "$EVIDENCE/shutdown/post-gpu-compute-apps.csv"
@@ -118,10 +118,10 @@ nvidia-smi --query-gpu=timestamp,index,memory.used,memory.free,utilization.gpu,p
 
 Pass kosullari:
 
-- `18082` kapali
-- `8012` kapali
-- PID `2811072` yok
-- PID `2809519` yok
+- live gateway portu kapali
+- live backend portu kapali
+- gateway PID yok
+- backend PID yok
 - GPU compute apps listesinde live vLLM worker kalmamis
 - GPU memory A/B/C/D icin yeterli headroom gosteriyor
 

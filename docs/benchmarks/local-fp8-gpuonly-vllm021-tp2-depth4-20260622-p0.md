@@ -1,4 +1,4 @@
-# Benchmark Record: homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0
+# Benchmark Record: local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0
 
 This record scopes the public FP8 GPU-only MTP speedup claim for the
 0.2.0a1 hardening line. It is a local hardware/configuration result, not a
@@ -80,8 +80,8 @@ vllm-mtp bench \
     --runs 10 \
     --warmup-runs 2 \
     --artifact-root artifacts/benchmarks \
-    --artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0 \
-    --json-output bench-results/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.json
+    --artifact-id local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0 \
+    --json-output bench-results/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.json
 ```
 
 Generate the matrix used for the published output-token targets:
@@ -98,7 +98,7 @@ vllm-mtp bench-matrix \
     --output-token-target 512 \
     --runs 10 \
     --warmup-runs 2 \
-    --json-output bench-results/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0-matrix.json
+    --json-output bench-results/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0-matrix.json
 ```
 
 Generated artefact directories and JSON files are local release evidence, not

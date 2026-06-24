@@ -179,7 +179,7 @@ def test_readme_warns_against_manual_source_archives():
 
 def test_readme_scopes_public_benchmark_claims_to_immutable_result():
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "Benchmark ID: `homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`" in readme
+    assert "Benchmark ID: `local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`" in readme
     assert "not a universal Gemma 4 MTP performance claim" in readme
     assert "2x NVIDIA GeForce RTX 5090, 32 GB each" in readme
     assert "`profile`: `tp2_2x32_fp8_gpuonly`" in readme
@@ -195,7 +195,8 @@ def test_readme_scopes_public_benchmark_claims_to_immutable_result():
     assert "BF16 CPU-offload smoke" in readme
     assert "FP8 GPU-only result" in readme
     assert "`e2e_output_tokens_per_second`" in readme
-    assert "`--artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`" in readme
+    assert "`--artifact-id local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`" in readme
+    assert ("home" + "lander") not in readme.lower()
     for value in ("3.46x", "3.89x", "3.99x", "47.79", "54.02", "55.03"):
         assert value in readme
 
@@ -222,7 +223,7 @@ def test_readme_removes_stale_unscoped_benchmark_numbers():
 def test_benchmark_record_documents_reproduction_without_local_paths():
     record = Path(
         "docs/benchmarks/"
-        "homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md"
+        "local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md"
     ).read_text(encoding="utf-8")
     assert "local hardware/configuration result" in record
     assert "direct vLLM endpoint A/B" in record
@@ -232,7 +233,8 @@ def test_benchmark_record_documents_reproduction_without_local_paths():
     assert "Speculative depth: 4" in record
     assert "`e2e_output_tokens_per_second`" in record
     assert "vllm-mtp bench" in record
-    assert "--artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0" in record
+    assert "--artifact-id local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0" in record
+    assert ("home" + "lander") not in record.lower()
     for value in ("3.46x", "3.89x", "3.99x", "47.79", "54.02", "55.03"):
         assert value in record
     for forbidden in (
@@ -312,8 +314,11 @@ def test_p1_001r_runbook_documents_repaired_2x2_gates():
     assert "`codex/p0-008-p1-001r-code-gate`" in runbook
     assert "record `git rev-parse HEAD`" in runbook
     assert "`01dc54a93cc46d2513b40acd4a268b22d0c1f6bf`" in runbook
-    assert "`127.0.0.1:8012`" in runbook
-    assert "`127.0.0.1:18082`" in runbook
+    assert "private loopback backend port" in runbook
+    assert "private loopback gateway port" in runbook
+    assert "$LIVE_BACKEND_URL" in runbook
+    assert ("`127.0.0.1:" + "80" + "12`") not in runbook
+    assert ("`127.0.0.1:" + "180" + "82`") not in runbook
     assert "Live default profile must not change" in runbook
     assert "`change_default_profile` must remain `false`" in runbook
     for config in ("A", "B", "C", "D"):
@@ -444,7 +449,7 @@ def test_verify_source_archive_rejects_absolute_local_paths(tmp_path):
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr(
             "README.md",
-            "workspace " + "/" + "Users" + "/alicankiraz/private\n",
+            "workspace " + "/" + "Users" + "/private-user/private\n",
         )
 
     result = subprocess.run(

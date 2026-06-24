@@ -8,9 +8,9 @@ default/live profil degistirilmedi.
 
 ## Remote Hazirlik
 
-- Host: `homelander`
-- Izole kod checkout: `p1-001r-code-7b1668a/repo`
-- Kod HEAD: `7b1668a7a22be62e904010635f41b92a50a5ccb2`
+- Host: private GPU validation host
+- Izole kod checkout: private validation checkout
+- Kod HEAD: recorded in private evidence
 - Final source archive SHA256: `fc3b45defdc9a437d536acdc9303c145333857783f4a10fec0871dd625611137`
 - Final bundle SHA256: `3d960bd53d07e777af9f4c299df6970685c59d95fb315b272bbbe0ca65d767aa`
 - Wheel SHA256: `a3305cc2aeb46a1920fb6e5555d42563505ca833974f7664192601b6e7deef71`
@@ -21,10 +21,10 @@ degistirilmedi.
 
 ## Evidence
 
-- Evidence name: `p1-001r-repair-20260624T220543Z`
-- Latest pointer on Homelander: `p1-001r-latest-prestop.path`
-- Code head recorded in evidence: `7b1668a7a22be62e904010635f41b92a50a5ccb2`
-- Live repo head recorded in evidence: `e881fe4ee0cdad10b0babb929bc3cd8a9976ca79`
+- Evidence name: private baseline evidence ID
+- Latest pointer on validation host: private baseline pointer file
+- Code head recorded in evidence: private evidence value
+- Live repo head recorded in evidence: private evidence value
 - Evidence SHA256 manifest: `SHA256SUMS`
 - Secret/local-path scan: `clean`
 - Rollback command artifact: `pre-stop/rollback-commands.redacted.sh`
@@ -42,15 +42,15 @@ evidence artifact.
 ## Live Process Snapshot
 
 | Component | Port | PID | Status |
-| --- | ---: | ---: | --- |
-| vLLM backend | 8012 | 2809519 | listening |
-| gateway | 18082 | 2811072 | listening |
+| --- | --- | --- | --- |
+| vLLM backend | captured private loopback port | captured private PID | listening |
+| gateway | captured private loopback port | captured private PID | listening |
 
 Current active profile:
 
 - gateway profile: `tp2_2x32_fp8_gpuonly`
-- backend systemd scope: `session-7041.scope`
-- gateway systemd scope: `session-7041.scope`
+- backend systemd scope: captured private session scope
+- gateway systemd scope: captured private session scope
 
 Recorded live backend argv confirms the rollback profile shape:
 
@@ -106,17 +106,16 @@ No smoke stderr files were non-empty.
 
 ## GPU Snapshot
 
-`nvidia-smi` pre-stop snapshot:
+`nvidia-smi` pre-stop snapshot is preserved in the private evidence bundle. The
+public source tree records only the kind of evidence captured, not the private
+host's instantaneous utilization, power, clock, or memory readings.
 
-| GPU | Memory Used | Memory Free | Utilization | Power | SM Clock | Memory Clock |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 31133 MiB | 977 MiB | 88% | 106.07 W | 2842 MHz | 13801 MHz |
-| 1 | 31118 MiB | 991 MiB | 98% | 107.86 W | 2865 MHz | 13801 MHz |
+Captured categories:
 
-Compute apps:
-
-- `VLLM::Worker_TP0`: 31108 MiB
-- `VLLM::Worker_TP1`: 31108 MiB
+- per-GPU memory used/free/total
+- per-GPU utilization and power draw
+- SM and memory clocks
+- compute process names and memory use
 
 ## Devam Kapisi
 

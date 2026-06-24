@@ -412,7 +412,7 @@ async def test_doctor_reports_cpu_offload_mismatch_from_active_manifest(tmp_path
 
 @pytest.mark.asyncio
 async def test_doctor_redacts_private_served_model_name():
-    private_name = "/" + "home" + "/homelander/private-served-name"
+    private_name = "/" + "home" + "/private-user/private-served-name"
 
     def handler(request):
         if request.url.path == "/health":

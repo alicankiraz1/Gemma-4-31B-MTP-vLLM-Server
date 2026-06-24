@@ -920,12 +920,12 @@
           "size_bytes": 100
         },
         {
-          "relative_path": "final-port-18082.txt",
+          "relative_path": "final-live-gateway-port.txt",
           "sha256": "d1b4919f89d00b1e9799bb8ceea712c23f3cb806a456f8c321d19c9ca1fab4b0",
           "size_bytes": 86
         },
         {
-          "relative_path": "final-port-8012.txt",
+          "relative_path": "final-live-backend-port.txt",
           "sha256": "2509835294e38a377ff0d3399fd38a89a56fbe59c5ae381d45420940b6f14bff",
           "size_bytes": 81
         },
@@ -1415,12 +1415,12 @@
           "size_bytes": 95
         },
         {
-          "relative_path": "stop-live/port-18082-after-gateway-stop.txt",
+          "relative_path": "stop-live/live-gateway-port-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "stop-live/port-8012-after-backend-stop.txt",
+          "relative_path": "stop-live/live-backend-port-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
@@ -1446,7 +1446,7 @@
         }
       ],
       "index_format": "sha256  size_bytes  relative_path",
-      "index_sha256": "2f61b0f7292c018d8012b3b87ba964d0040bcbe93825841fa8fd971c5a908171",
+      "index_sha256": "redacted-index-sha256",
       "label": "legacy",
       "local_path_scan": {
         "match_count": 38,
@@ -1486,7 +1486,7 @@
         "scanned_file_count": 175,
         "snippets_included": false
       },
-      "root_name": "p1-001-maintenance-20260622T202831Z",
+      "root_name": "redacted-existing-maintenance-evidence",
       "secret_scan": {
         "match_count": 0,
         "matched_file_count": 0,
@@ -1523,47 +1523,47 @@
           "size_bytes": 1706674
         },
         {
-          "relative_path": "homelander-compileall.stderr",
+          "relative_path": "validation-host-compileall.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "homelander-compileall.stdout",
+          "relative_path": "validation-host-compileall.stdout",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "homelander-diff-check.stderr",
+          "relative_path": "validation-host-diff-check.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "homelander-diff-check.stdout",
+          "relative_path": "validation-host-diff-check.stdout",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "homelander-pip-check.stderr",
+          "relative_path": "validation-host-pip-check.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "homelander-pip-check.stdout",
+          "relative_path": "validation-host-pip-check.stdout",
           "sha256": "9261363b733079a641c2e4cc9bc46ffa1d8336945a87f807b6cf68847dbc9b09",
           "size_bytes": 30
         },
         {
-          "relative_path": "homelander-test-bench-cli.stderr",
+          "relative_path": "validation-host-test-bench-cli.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "homelander-test-bench-cli.stdout",
+          "relative_path": "validation-host-test-bench-cli.stdout",
           "sha256": "a96ce563fa1bd0b566bd52c0b92918d61d44aa98363ed6754f06011d852f543d",
           "size_bytes": 99
         },
         {
-          "relative_path": "homelander-worktree-audit.json",
+          "relative_path": "validation-host-worktree-audit.json",
           "sha256": "2915bd0d2cf0229b9430bd798912a6fa444cf838135efc5e4ba37fdd770700bf",
           "size_bytes": 495
         },
@@ -1573,1022 +1573,1022 @@
           "size_bytes": 856
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/analysis/p1-001r-final-report.md",
+          "relative_path": "maintenance-2x2-redacted/analysis/p1-001r-final-report.md",
           "sha256": "b88828ee09b0ca9a5ab702c92e8535e82c788bcd9e1a3842bd6358e624228d71",
           "size_bytes": 2540
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/analysis/p1-001r-matrix-analysis.json",
+          "relative_path": "maintenance-2x2-redacted/analysis/p1-001r-matrix-analysis.json",
           "sha256": "8eab49b275f003345661e58e37fe8d4d85bef1608045dfea97d26a8a4590fd22",
           "size_bytes": 25791
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/evidence-index.sha256",
+          "relative_path": "maintenance-2x2-redacted/evidence-index.sha256",
           "sha256": "a8de4237e407950163493f3164b718908c460cbba081bd65ebbb1ab64017d12a",
           "size_bytes": 20246
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/final-audit.json",
+          "relative_path": "maintenance-2x2-redacted/final-audit.json",
           "sha256": "18f742b0f1d0546ef704ac9ba1f0371a717bb9daeba3be6c100857bc209a9efe",
           "size_bytes": 842
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/final-nvidia-compute.csv",
+          "relative_path": "maintenance-2x2-redacted/final-nvidia-compute.csv",
           "sha256": "2db74927a2949a8b9020775d8795a41fb38e1bab0c0bd9b4c0481c04b88945c0",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/final-ports.txt",
+          "relative_path": "maintenance-2x2-redacted/final-ports.txt",
           "sha256": "992f05d21ad049afabc8505a9c8444ceaa86f9a8237b0633a21864f4d7109148",
           "size_bytes": 168
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/backend.pid",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/backend.pid",
           "sha256": "c907f540053c5c44780930afcf2ccc391dc9ceeb3ddd04eeca7a66cc6a986802",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/backend.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/backend.stderr",
           "sha256": "b8026d5b9f504561c94c1a8a36e72fc864050fc7ed1671f54517b480bf3db2c1",
           "size_bytes": 909
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/backend.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/backend.stdout",
           "sha256": "1d98cd1727c1df29bab72b3fdebe9e086672f7488e284065414ee049841c2d2a",
           "size_bytes": 69690
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/bench-single.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/bench-single.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/bench-single.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/bench-single.stdout",
           "sha256": "c7ab66ba411c47c1244f39624bb5764910de20e72a52e8a949dab815ee71c0d1",
           "size_bytes": 12458928
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/eager_no_mtp.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/eager_no_mtp.json",
           "sha256": "8d5240c2f8cfe8f466990cd22bb2bd638950039cddc143f5e7b4d2b60d990cd1",
           "size_bytes": 12458927
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/end-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/end-time.txt",
           "sha256": "815d6ab9a9dc764fee4cd7f46ce99dd9584ccf7244101ae4fbe6fc7ec65ea3e9",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/gpu-monitor.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/gpu-monitor.csv",
           "sha256": "b793a97ec757e72053d49b8a3e446059c0d6c3edc386e43a4bb6bd642dfde3b4",
           "size_bytes": 230576
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/launch.argv",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/launch.argv",
           "sha256": "cbea0329320ccf0c1e2cb711a7357ef7314430b6a20000a506642c07fe5143c7",
           "size_bytes": 301
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/metrics-after-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/metrics-after-interesting.prom",
           "sha256": "b2023d36c4db15fb945586d38c7e4c4c04edc02ed38311405bd967b557363cc0",
           "size_bytes": 1686
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/metrics-after.prom",
           "sha256": "6adedbd60f05bd97ae036bcb33fd5d310650f0e64705bc26a16ee4b0f498e3c5",
           "size_bytes": 51938
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/metrics-before-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/metrics-before-interesting.prom",
           "sha256": "b2023d36c4db15fb945586d38c7e4c4c04edc02ed38311405bd967b557363cc0",
           "size_bytes": 1686
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/metrics-before.prom",
           "sha256": "ce18a24e3304988e41687de27c13b44c41abbad43ed7f9844240f6ab818fc7bd",
           "size_bytes": 50163
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/models.curl.err",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/models.curl.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/models.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/models.json",
           "sha256": "dcac864824e1807b8914ec2cd03eda5ad1efece19690e86a350b0cb9f3dec0b8",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/nvidia-compute-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/nvidia-compute-after-stop.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/nvidia-compute-after-stop.latest",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/nvidia-compute-after-stop.latest",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/nvidia-compute-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/nvidia-compute-before-stop.csv",
           "sha256": "ae8dddf8f308553dbda761c3110c71e5b3092314574e08684417c5cfe0242e59",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/nvidia-gpu-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/nvidia-gpu-before-stop.csv",
           "sha256": "1f79865aa64e4c109ce98a5b2d66a52b578ada50e71a691dce13baf9293c46c6",
           "size_bytes": 280
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/peak-gpu-memory-mib.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/peak-gpu-memory-mib.json",
           "sha256": "0783e178a627c0c2ba40347b6fd97936e47e43a007224cf7a28d327810fea908",
           "size_bytes": 79
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/runtime-manifest.json",
           "sha256": "d6fc1e47838bec4643bf038161c99e914b3e3640e35ed4c71d3e98e0368ad987",
           "size_bytes": 1064
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/ss-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/ss-after-stop.txt",
           "sha256": "a615282be51f7b706ca0e65df872f51cb87a198f4efa28badd8c5d48b324fc7b",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/start-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/start-time.txt",
           "sha256": "4b0ecb820f0b5716317e4a879f2f91a1da0d2e2856cf13a0af790094bfb28856",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/startup-seconds.txt",
           "sha256": "fb83c18fe54bc8e5f4f4c0a69137b943eb7c2588e927412eb4acc113d004d5f9",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/A/targeted-stop.log",
+          "relative_path": "maintenance-2x2-redacted/matrix/A/targeted-stop.log",
           "sha256": "0553b58685d57d138d52f6ffb3662bf9e2ff45fe42efc4b4b3814bc22d7a6749",
           "size_bytes": 72
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/backend.pid",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/backend.pid",
           "sha256": "b703123462a5d07ddf13db7f1ec21f8bb28e89224fe56bb92b920d779e05089d",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/backend.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/backend.stderr",
           "sha256": "bea154155e98f3910ba0ec6710472489d5b9f98eed47c7c1c0ca14144e3fcf3b",
           "size_bytes": 1260
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/backend.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/backend.stdout",
           "sha256": "1f6418b49391d93e2da669aa9fc13de1a66fdc9e0558c9e1208ff72394437d17",
           "size_bytes": 74446
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/bench-single.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/bench-single.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/bench-single.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/bench-single.stdout",
           "sha256": "f41638c354ca8dd816f6abb7eca10507e9751f82f3c611987c10ded4b7f90811",
           "size_bytes": 5379828
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/eager_mtp.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/eager_mtp.json",
           "sha256": "f2eaa43b33bc55825dd653fcaee8e00ab0e74489dd960a88ae013594cd9acfca",
           "size_bytes": 5379827
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/end-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/end-time.txt",
           "sha256": "de32291e4ae7687bb26221fc29b9b0c168cbfc31ba9d65da1799f4647843058b",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/gpu-monitor.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/gpu-monitor.csv",
           "sha256": "8f38ed5ebfc9720a9e240dc7178ce281da0de71ee7d4484e73eeab95e39f4c23",
           "size_bytes": 105352
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/launch.argv",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/launch.argv",
           "sha256": "ebe9f3e3399057860c4d4eeb6797dab1fd6d00951ce46d7122e734e3a0b7c6bd",
           "size_bytes": 410
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/metrics-after-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/metrics-after-interesting.prom",
           "sha256": "79f07d26eefc7181de428027ab9a87fbb6b50cc825352695ba13f2de470043b5",
           "size_bytes": 4323
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/metrics-after.prom",
           "sha256": "42c1d10708626d7cb2223753bdc656d8869a4e5cef9563ef03db037b8421ab1b",
           "size_bytes": 54551
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/metrics-before-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/metrics-before-interesting.prom",
           "sha256": "401fd2ec2861e7ec9d5273ee6829abf6d28855227d761c8b9bbd5fe550d73521",
           "size_bytes": 4300
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/metrics-before.prom",
           "sha256": "a3f999d72efcb3d5b247cd03347e1eaa249f92f3e00dc5ff2933b83851ae1f66",
           "size_bytes": 52782
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/models.curl.err",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/models.curl.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/models.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/models.json",
           "sha256": "4f87597e02c8221eda62eea154d9aceffc9060e7b43f29208f8353174ddd8fe4",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/nvidia-compute-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/nvidia-compute-after-stop.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/nvidia-compute-after-stop.latest",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/nvidia-compute-after-stop.latest",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/nvidia-compute-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/nvidia-compute-before-stop.csv",
           "sha256": "2530688bcc0bc93756cf9d53789ff1c6b7ac0e5c544e524080868557cd325551",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/nvidia-gpu-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/nvidia-gpu-before-stop.csv",
           "sha256": "526f5c6631568f381955b422229de41136007e9433f8e6fc6725f0772bfe98a5",
           "size_bytes": 282
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/peak-gpu-memory-mib.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/peak-gpu-memory-mib.json",
           "sha256": "6905859acfbea8096af04273a7cd3040ea223d2ca1b5e4525b817194fa70f38e",
           "size_bytes": 79
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/runtime-manifest.json",
           "sha256": "c9ef19523498abecc1898ca7348cf02bc4a4e4222cdebd5d95134bfccf20fb08",
           "size_bytes": 1194
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/ss-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/ss-after-stop.txt",
           "sha256": "125707cdf6b3eca28177723455aa864b24a51eee7ed8258bfaf2e39ac35e5aff",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/start-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/start-time.txt",
           "sha256": "ed610ffaddfe7bcc54fbe7504bd14f5c348fc11ebf438b093f410273630aad3e",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/startup-seconds.txt",
           "sha256": "fb50c0e68682dd3e8a94ca8cb85e282b72d0f113e59e54045f8c5bd8c71acefa",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/B/targeted-stop.log",
+          "relative_path": "maintenance-2x2-redacted/matrix/B/targeted-stop.log",
           "sha256": "991c5c5f533637526e3e35c83b1b93d031cd1bbdd5375c89bd36f78210479619",
           "size_bytes": 72
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/backend.pid",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/backend.pid",
           "sha256": "12e207284e58e5bb707292f772301c0800ed63b38df3197ea53c6d11f5900acf",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/backend.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/backend.stderr",
           "sha256": "645f3446e33605d03117187452155f7fdcc7227082750379db8f5e049f66c15f",
           "size_bytes": 1928
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/backend.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/backend.stdout",
           "sha256": "d688502cac52b7e4032d881081b8f78363713c4da52f88f837d6a0141c0e2db5",
           "size_bytes": 38769
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/bench-single.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/bench-single.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/bench-single.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/bench-single.stdout",
           "sha256": "0a7dd6b2a392f87b7725afb8bc353a387c4ab9c59797094b9ad8182bd8fb9c8c",
           "size_bytes": 12467632
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/end-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/end-time.txt",
           "sha256": "429b5ef321bc61c5790691c815210cc9e001c4f75cbfa8e4e3a99c10be8c6a65",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/gpu-monitor.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/gpu-monitor.csv",
           "sha256": "16b186004eca8853dfeba78036cd914ac301f78bd8a47e07a446b6502ed7ecdf",
           "size_bytes": 74585
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/graph_no_mtp.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/graph_no_mtp.json",
           "sha256": "ff8ef19fb43ceb985b16c598b04ca7e46fb6d7c2aa924af1c5d6195d95e78451",
           "size_bytes": 12467631
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/launch.argv",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/launch.argv",
           "sha256": "b80b4083a6bdea63043dfca667e875f83955bf0fe3ed7264d83ee811985812c3",
           "size_bytes": 285
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/metrics-after-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/metrics-after-interesting.prom",
           "sha256": "58084afda5bddbdf4ddc5c9b0998fece8e1ef77af6e788f2c4a598eb3490e2f4",
           "size_bytes": 1686
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/metrics-after.prom",
           "sha256": "e6289e1d8fc9517c7d22ad6451c0f39c20d9caa36e2d99717deedfe4cc6acb4a",
           "size_bytes": 51983
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/metrics-before-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/metrics-before-interesting.prom",
           "sha256": "58084afda5bddbdf4ddc5c9b0998fece8e1ef77af6e788f2c4a598eb3490e2f4",
           "size_bytes": 1686
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/metrics-before.prom",
           "sha256": "0f383fa8bdee29303ae33d97b4e17f58d3776624a9504dded8c4f8dc88da44e7",
           "size_bytes": 50168
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/models.curl.err",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/models.curl.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/models.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/models.json",
           "sha256": "e7e1eb6e5404c6b3583cfe9e3e7934e896cfc3e17bc07b49162c8085ff4bb65a",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/nvidia-compute-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/nvidia-compute-after-stop.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/nvidia-compute-after-stop.latest",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/nvidia-compute-after-stop.latest",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/nvidia-compute-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/nvidia-compute-before-stop.csv",
           "sha256": "5adf341c8826949efdb4ca2642f5a0e9a1cfbd820f621727b580ea8b253e0c62",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/nvidia-gpu-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/nvidia-gpu-before-stop.csv",
           "sha256": "50de329ea6d72d8fc6f04add3a23801c528c9eea9960b31faa832f4823a461f3",
           "size_bytes": 280
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/peak-gpu-memory-mib.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/peak-gpu-memory-mib.json",
           "sha256": "cf8daa850952bad31d1f058f4c6e0e78626736e55bbedb9533e0c9ce977ab970",
           "size_bytes": 79
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/runtime-manifest.json",
           "sha256": "35bf18d96c85b4c9941a15121597bc9f130e62f13f71c197971f2b9c20652ba6",
           "size_bytes": 1052
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/ss-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/ss-after-stop.txt",
           "sha256": "af39ba98d3f52e8cfd757f54bfa2d01e546f1a308243a5c6983a6f8cd47a41db",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/start-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/start-time.txt",
           "sha256": "dcb4a4b25ecc5a5ba4127c4aef6ce854a66e712d057ce60687976510d91713b5",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/startup-seconds.txt",
           "sha256": "6cb72d6320023792b8421221379dfdb667a57adad62cf59febf75944bb9ec41c",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/C/targeted-stop.log",
+          "relative_path": "maintenance-2x2-redacted/matrix/C/targeted-stop.log",
           "sha256": "a0f52f8840a6ca4ca1656543003b4c49887500df39a167dae5dcd63657f1edba",
           "size_bytes": 72
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/backend.pid",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/backend.pid",
           "sha256": "bc753de24515c40d9dd824651a38cb3965409a7bce6d5aa2057e89ba34679e0e",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/backend.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/backend.stderr",
           "sha256": "11be047764738ef61d0a315cbeedf72b75f4543af4ce610f6ffb5975384a9412",
           "size_bytes": 2383
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/backend.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/backend.stdout",
           "sha256": "1b23cdba544cbb6a3404cc7ed236fd5da40057ea009a1ad52ee6b55702349330",
           "size_bytes": 46747
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/bench-single.stderr",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/bench-single.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/bench-single.stdout",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/bench-single.stdout",
           "sha256": "9417b1833e21c3f5d0fc782d5c5eda538b060cf212212eac452e592b2da21b1e",
           "size_bytes": 5239703
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/end-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/end-time.txt",
           "sha256": "d7f5964100537116f49f2ef8db4f2f6f44bccf85f0f38445b95f570ecd6d0092",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/gpu-monitor.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/gpu-monitor.csv",
           "sha256": "f739afa41c9c17018d27d469955105c08e42c79eb9aa07aa5ba71d1311229ffa",
           "size_bytes": 45038
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/graph_mtp.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/graph_mtp.json",
           "sha256": "3d5f4a39416974f6e2c6c91ed795694437f2e5c1403b676d6fca98fdff76b119",
           "size_bytes": 5239702
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/launch.argv",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/launch.argv",
           "sha256": "9da132ff2f46e14c5f0f5f657d4e6aa81a30df3777a2b3f174bcfd516b2351af",
           "size_bytes": 394
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/metrics-after-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/metrics-after-interesting.prom",
           "sha256": "3f39cdeeba9258671bb732c242e79e8d6ce3e173618668e8526a5958d9d64b3f",
           "size_bytes": 4324
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/metrics-after.prom",
           "sha256": "3a7efffe30f0d2af5b6e363b2837bc82881545c55168d9719b3ddb7f350a1c4a",
           "size_bytes": 54584
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/metrics-before-interesting.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/metrics-before-interesting.prom",
           "sha256": "03e90196810e9a17cedbb843dfb703b25b2f03b39afe502d65fdd63e46a9f131",
           "size_bytes": 4301
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/metrics-before.prom",
           "sha256": "1d0514994d8d9427f9655f6b2b03ad89206394cd722ca19bd9a320aa86ff9bd5",
           "size_bytes": 52779
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/models.curl.err",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/models.curl.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/models.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/models.json",
           "sha256": "d2e71718c1aeeffb7b23253bd43ac5be83a0426385e48b0ee07e3caafa0db437",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/nvidia-compute-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/nvidia-compute-after-stop.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/nvidia-compute-after-stop.latest",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/nvidia-compute-after-stop.latest",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/nvidia-compute-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/nvidia-compute-before-stop.csv",
           "sha256": "75224d9eabd09127e09e5404dfcc965fc2eb73f3ed239b1b9224a03a42f6a5d5",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/nvidia-gpu-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/nvidia-gpu-before-stop.csv",
           "sha256": "665c02b8ac90234747e2aa022020f0069794903c6e26d54cb707e199c25a48c8",
           "size_bytes": 282
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/peak-gpu-memory-mib.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/peak-gpu-memory-mib.json",
           "sha256": "ed054aaf00f27aeb44606a94b2158685931830e61d9b7d741b329726caee9af3",
           "size_bytes": 79
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/runtime-manifest.json",
           "sha256": "1140a2eefbe8490948cd217bee7fd4d67ce07de37f13658570f76cd89bb5fbff",
           "size_bytes": 1182
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/ss-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/ss-after-stop.txt",
           "sha256": "7ff3ccb3b5d3d1979a42fbf8c9f190290b3f54c2c786db3e51dea4dcc6c031a0",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/start-time.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/start-time.txt",
           "sha256": "d76e54506d3891423de27eb29faec2ec50ab2aba60baaad2655f1f3d6cf60bd1",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/startup-seconds.txt",
           "sha256": "a28f356c02ab0a4178ec372455f98fc270c2c4e5da3ae56a14c3a808f61f3cd3",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/matrix/D/targeted-stop.log",
+          "relative_path": "maintenance-2x2-redacted/matrix/D/targeted-stop.log",
           "sha256": "dee0daec55d76f396c8811b4429d7239f980b96cb39f7c17553d83234b970024",
           "size_bytes": 72
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/SHA256SUMS",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/SHA256SUMS",
           "sha256": "e6f29aaa59990ee6f9173a3fc7ec1d53081e14d84a105b3802ce57ad257f3c53",
           "size_bytes": 2808
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/backend-metrics.prom",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/backend-metrics.prom",
           "sha256": "0d167f8b4e42bd2828d2146b9a8f70866b27561a7761a614d372f63eb970feaf",
           "size_bytes": 55647
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/backend-models.json",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/backend-models.json",
           "sha256": "1991c7d3b5dce2767c9252362dc8a2ded773dd567c540a15ed1335580d416435",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/doctor.json",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/doctor.json",
           "sha256": "2012151f539cbe6da20fbe327ebe318f8c0df450e513b63633c0cb860a092e6a",
           "size_bytes": 4793
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/doctor.stderr",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/doctor.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/gateway-health-auth.json",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/gateway-health-auth.json",
           "sha256": "b40cbaa307a32101e0a33bf09e32ca84ce821855ca95a206524fdb63a967770c",
           "size_bytes": 5824
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/gateway-health.json",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/gateway-health.json",
           "sha256": "5a67ff3fcd586b356f69a42f701977c8f09fec162382686d946d4a55b474b162",
           "size_bytes": 103
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/gateway-metrics.prom",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/gateway-metrics.prom",
           "sha256": "5a67ff3fcd586b356f69a42f701977c8f09fec162382686d946d4a55b474b162",
           "size_bytes": 103
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/live-pids.env",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/live-pids.env",
           "sha256": "1236790a46142991aa138d6ffb1bdc8ff541f0f70784edc95138714d12c8267d",
           "size_bytes": 40
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/live-processes.json",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/live-processes.json",
           "sha256": "61505dfc541263f916facc2df0b7ae2966e11707becb7fd822c6299eff0ea598",
           "size_bytes": 2346
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/live-runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/live-runtime-manifest.json",
           "sha256": "bcd47a41cfbdfb540da64355a8552ccc827576418d55d249815ae570b197f760",
           "size_bytes": 1194
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/manifest.txt",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/manifest.txt",
           "sha256": "3cfbe077c0c947fdde468654bd21534d4c3f42ae12332651b658e3e891bd684f",
           "size_bytes": 580
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/nvidia-compute-apps.csv",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/nvidia-compute-apps.csv",
           "sha256": "28efd1091851c7b6b58f38ffbcaf12b3c40f2d54522cf6bbdd3767935df4c4ea",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/nvidia-gpu.csv",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/nvidia-gpu.csv",
           "sha256": "f6f786c13526d00450397a9e23266218db983b4b1413085c14e9d48ab909fdc7",
           "size_bytes": 280
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/rollback-commands.redacted.sh",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/rollback-commands.redacted.sh",
           "sha256": "03b3c60ecfe60832b86fdbbbb797dbbafbc8dfa09b7c991c4bf7ab03dad1b532",
           "size_bytes": 449
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/ss-18082.txt",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/ss-live-gateway-port.txt",
           "sha256": "d1b4919f89d00b1e9799bb8ceea712c23f3cb806a456f8c321d19c9ca1fab4b0",
           "size_bytes": 86
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/ss-8012.txt",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/ss-live-backend-port.txt",
           "sha256": "2509835294e38a377ff0d3399fd38a89a56fbe59c5ae381d45420940b6f14bff",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/pre-stop/ss-matrix-ports.txt",
+          "relative_path": "maintenance-2x2-redacted/pre-stop/ss-matrix-ports.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/recommendation/bench-compare.stderr",
+          "relative_path": "maintenance-2x2-redacted/recommendation/bench-compare.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/recommendation/bench-compare.stdout",
+          "relative_path": "maintenance-2x2-redacted/recommendation/bench-compare.stdout",
           "sha256": "5b769f240fe2a2db274bd72569dc616ccb0b605956f611cbec22b51570d47265",
           "size_bytes": 31835
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/recommendation/p1-001r-recommendation.json",
+          "relative_path": "maintenance-2x2-redacted/recommendation/p1-001r-recommendation.json",
           "sha256": "fe837f5d20cc8e739ad06419ca6ebdae6ce0921f198e05662507a2e4cbcf70ae",
           "size_bytes": 31834
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/backend-listener.pid",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/backend-listener.pid",
           "sha256": "39d6eb2c3bd798217e21a9d8a5b660db4dd5b0a5e20cdafde3b9f55ebfb19105",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/backend-startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/backend-startup-seconds.txt",
           "sha256": "5a599cdc48b859c69b4150e4f67ea609cb65a96687f8c49f06581657a4cf65ae",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/backend-wrapper.pid",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/backend-wrapper.pid",
           "sha256": "39d6eb2c3bd798217e21a9d8a5b660db4dd5b0a5e20cdafde3b9f55ebfb19105",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/backend.stderr",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/backend.stderr",
           "sha256": "b8a177ba682f88bbc679b26a527527d47697e8425cdd8a8505573e11766c15a7",
           "size_bytes": 1011
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/backend.stdout",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/backend.stdout",
           "sha256": "c639d02ca335fa48b2baea6ad0531f94b613f467ecf33c127fd8160742437bac",
           "size_bytes": 29864
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway-health-ready.err",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway-health-ready.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway-health-ready.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway-health-ready.json",
           "sha256": "79c0026d412f1fccd7b2edf33d56ccd9fe9d311430892f49f2f76a21adc43a8b",
           "size_bytes": 5600
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway-health.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway-health.json",
           "sha256": "c260e9a0e384030d18caca420e35030e50f5ff1a3149b8e48a3eee9329a3048f",
           "size_bytes": 5600
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway-listener.pid",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway-listener.pid",
           "sha256": "9d36a82940f04db589abbb0c375d72af0cc05ac5493d1becfa6ab2cf0b21bc7a",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway.pid",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway.pid",
           "sha256": "9d36a82940f04db589abbb0c375d72af0cc05ac5493d1becfa6ab2cf0b21bc7a",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway.stderr",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway.stderr",
           "sha256": "156304b43ab6cacd675ef3e001f3bef6e57681fda437b23fa6a0b88c85651117",
           "size_bytes": 201
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/gateway.stdout",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/gateway.stdout",
           "sha256": "7f77aa8b09df898a8e883832c85e9d37c766893bde943a6432d386c7fb4366ad",
           "size_bytes": 680
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/live-models-ready.err",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/live-models-ready.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/live-models-ready.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/live-models-ready.json",
           "sha256": "a5ad42633461e426b26bacfcd122956675ea77cb391770724e76a742c62cefb5",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/live-processes-redacted.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/live-processes-redacted.json",
           "sha256": "aae1438f98e026432740db134369ebf2ce1c9d70d4b5167a075cf314818a037e",
           "size_bytes": 1462
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/live-repo-head.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/live-repo-head.txt",
           "sha256": "271992513759fa0c1ea32f99d8bd54e50eb7758efae8e616d3e588348446cd91",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/live-repo-status.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/live-repo-status.txt",
           "sha256": "91c609349897bbe0d5828ca5d947f15761016afdf83a1eea16107546cca32846",
           "size_bytes": 36
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/nvidia-after-restore.csv",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/nvidia-after-restore.csv",
           "sha256": "2db74927a2949a8b9020775d8795a41fb38e1bab0c0bd9b4c0481c04b88945c0",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/nvidia-before-restore.csv",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/nvidia-before-restore.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/ports-before-restore.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/ports-before-restore.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/ss-18082.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/ss-live-gateway-port.txt",
           "sha256": "7e561235410dd7fdd637667ef5d7455b4df413b911e567f0ee0987f095280574",
           "size_bytes": 86
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-restore/ss-8012.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-restore/ss-live-backend-port.txt",
           "sha256": "06a475efcfe2a104c4666f427962a5de6e5bc7f82dd7b4ed42ee37cf69be3fb3",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/anthropic-messages.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/anthropic-messages.json",
           "sha256": "e320d220fd59fd26b1f53b4beac3fad78b0bd63a9bf887a0d12131f421c52dca",
           "size_bytes": 252
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/anthropic-stream.sse",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/anthropic-stream.sse",
           "sha256": "4190f795bf57e314e7a36135affdc9dff7fc595b0b8aa4825db9f7d6cb2e4c29",
           "size_bytes": 957
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/backend-metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/backend-metrics-after.prom",
           "sha256": "de95d2a039edd9e1e40d936111b993afb36a0d3bf9b5b44bd775aa220fb984af",
           "size_bytes": 54242
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/backend-metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/backend-metrics-before.prom",
           "sha256": "965b0283b6525e038668c8a056dce2f9ad227810ef00647d0c7550a5a3f123b0",
           "size_bytes": 52777
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/backend-models.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/backend-models.json",
           "sha256": "92e867f1343627b42af2fbb74a8261eb851e968b25b0b03df857a7053decf2ea",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/doctor-after.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/doctor-after.json",
           "sha256": "2e7e0ee5f98ca15b123de130b3f27cf9d75a7aa739551465b5f5166a8614144a",
           "size_bytes": 4717
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/doctor-after.stderr",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/doctor-after.stderr",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/gateway-metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/gateway-metrics-after.prom",
           "sha256": "672b95757ebf7651c7ced5d3741095457dc635f743693ed033b8ec00e96c9b21",
           "size_bytes": 626
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/gateway-metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/gateway-metrics-before.prom",
           "sha256": "a1771231f803dc21423a0b1cb928d4465addeded0f4f1d84d324f83c39df53e8",
           "size_bytes": 610
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/health-after.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/health-after.json",
           "sha256": "3383ab335079fa3c1d31699afb79ffb5d98c037616a5b4ed2fa0bbfac35a834b",
           "size_bytes": 5748
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/health-before.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/health-before.json",
           "sha256": "a7a2a56e85462b8d952a4a142e9f8e415c20acb0e9e2b24c7251709181515ea8",
           "size_bytes": 5600
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/nvidia-after-smoke.csv",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/nvidia-after-smoke.csv",
           "sha256": "2db74927a2949a8b9020775d8795a41fb38e1bab0c0bd9b4c0481c04b88945c0",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/openai-chat.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/openai-chat.json",
           "sha256": "9af02493360005ef4ad901a1def9b38b0d018b74c0a2352ecf2192bb824becce",
           "size_bytes": 649
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/openai-stream.sse",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/openai-stream.sse",
           "sha256": "4d8261a9d73300d2d7b3b005960b1666c203fa521e0525580584c4088957d6cb",
           "size_bytes": 804
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/smoke-summary.json",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/smoke-summary.json",
           "sha256": "b302e049253094c8a9f7879d32b355cc022e62a7da72cea322c6aee8551d18f2",
           "size_bytes": 545
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/ss-18082.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/ss-live-gateway-port.txt",
           "sha256": "7e561235410dd7fdd637667ef5d7455b4df413b911e567f0ee0987f095280574",
           "size_bytes": 86
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/live-smoke/ss-8012.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/live-smoke/ss-live-backend-port.txt",
           "sha256": "06a475efcfe2a104c4666f427962a5de6e5bc7f82dd7b4ed42ee37cf69be3fb3",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/nvidia-compute-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/rollback/nvidia-compute-after-stop.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/nvidia-compute-after-stop.latest",
+          "relative_path": "maintenance-2x2-redacted/rollback/nvidia-compute-after-stop.latest",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/nvidia-gpu-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/rollback/nvidia-gpu-after-stop.csv",
           "sha256": "7350136cd28d1fb023749e19dec36d234c5bd928b29f40e59522916c3ff297ed",
           "size_bytes": 275
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/ports-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/ports-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/ss-18082-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/ss-live-gateway-port-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/ss-8012-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/ss-live-backend-port-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/ss-matrix-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/rollback/ss-matrix-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/rollback/stop-live.log",
+          "relative_path": "maintenance-2x2-redacted/rollback/stop-live.log",
           "sha256": "d2e1dee8f15b5e8799d57269b4e3b3b15aa7d81686ae9c3c3a868c5dae619b65",
           "size_bytes": 58
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/launch.argv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/launch.argv",
           "sha256": "9da132ff2f46e14c5f0f5f657d4e6aa81a30df3777a2b3f174bcfd516b2351af",
           "size_bytes": 394
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/metrics-after.prom",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/metrics-after.prom",
           "sha256": "de955edd0950e4aa9c4ba8fd64e29dda0dea6d8181be828efe9cd1ae9b30cbec",
           "size_bytes": 54567
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/metrics-before.prom",
           "sha256": "d24c26f582a5891840935b3ad13462480989f7b926d74ce6c182d476c7b36793",
           "size_bytes": 54266
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/models.json",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/models.json",
           "sha256": "4c98746939d2747dbc6ac338d6fe82a8e8f89f951f8d46affbed8cde8eaf0b3e",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/nvidia-compute-after-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/nvidia-compute-after-stop.csv",
           "sha256": "cae79969ce448872401f5d9bcd1d52bbefa1a5450cf3a5658f62f068ab59294b",
           "size_bytes": 41
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/nvidia-compute-after-stop.latest",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/nvidia-compute-after-stop.latest",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/nvidia-compute-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/nvidia-compute-before-stop.csv",
           "sha256": "dabbfa7129064d71a622abf72c6a164127b26623fef1dc94f52a2b8bb504bb7b",
           "size_bytes": 115
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/nvidia-gpu-before-stop.csv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/nvidia-gpu-before-stop.csv",
           "sha256": "b10c18a8e6b5be0f07285c0c3e0ccebd17fa0ec3965be2a7af37c99468639ebc",
           "size_bytes": 280
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/nvidia-gpu-before.csv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/nvidia-gpu-before.csv",
           "sha256": "5864134c853fcc7bc5fac69376379082f518899fd07e8c883b82f27e7cccf22a",
           "size_bytes": 280
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/runtime-manifest.json",
           "sha256": "9c9de7351eb92279580231aaef385e7018c9eefb27dc89dec9383470f72c8a10",
           "size_bytes": 1182
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/soak-summary.json",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/soak-summary.json",
           "sha256": "ea4dc8c51efd8a9848198a90240351aaf225ee6c1953dc743dbb9c7357a3ac34",
           "size_bytes": 413
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/soak.jsonl",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/soak.jsonl",
           "sha256": "92a0e47d129bd16f5a4da8193ed26e0e78bee8b4927c322733857757711f30a0",
           "size_bytes": 9882
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/ss-8114-after-stop.txt",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/ss-8114-after-stop.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/ss-before.txt",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/ss-before.txt",
           "sha256": "6cb0724c21e8ed6654e820215f8f803f42c691e19741cbc10005a4fe5afa3b46",
           "size_bytes": 81
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/startup-seconds.txt",
           "sha256": "0ce142e93b08fa697cf7d62f912ed916d511174141d2cd69d664b5984e0f7751",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min-rerun/targeted-stop.log",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min-rerun/targeted-stop.log",
           "sha256": "d412a644f3bfdcd7d6dbdbe78f3a2dba2184a5b0fa76669faaf1741e21cbc203",
           "size_bytes": 37
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/backend-listener.pid",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/backend-listener.pid",
           "sha256": "a6850aa574450294e60f8f69ef60997d6f7c03d4a0c5ecf3affdc4a7c3cba8ee",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/backend-wrapper.pid",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/backend-wrapper.pid",
           "sha256": "9ac2f30b33a33945f77cbbcceda4e8e8c85b911a5534fa7fe39a2385dd409a97",
           "size_bytes": 8
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/backend.stderr",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/backend.stderr",
           "sha256": "493d122ad85a3bb4eecdd37ac1f74c7b1bae9bc721527fdfd72f068bcc93278a",
           "size_bytes": 2383
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/backend.stdout",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/backend.stdout",
           "sha256": "a9b2f4d39817deb90515d333a788e1e143c417122ac3beffa448c9423cb1378a",
           "size_bytes": 67368
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/launch.argv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/launch.argv",
           "sha256": "9da132ff2f46e14c5f0f5f657d4e6aa81a30df3777a2b3f174bcfd516b2351af",
           "size_bytes": 394
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/metrics-before.prom",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/metrics-before.prom",
           "sha256": "0374b60fac15d0d4f8608004f9f1a253c4b15e3a694f68bddd2abe17ed3ee407",
           "size_bytes": 52784
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/models.curl.err",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/models.curl.err",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "size_bytes": 0
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/models.json",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/models.json",
           "sha256": "4c98746939d2747dbc6ac338d6fe82a8e8f89f951f8d46affbed8cde8eaf0b3e",
           "size_bytes": 470
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/nvidia-gpu-ready.csv",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/nvidia-gpu-ready.csv",
           "sha256": "46c8cc9420c08127d3f4c2ab1241e1996e289447156f0050d9bb5be81575889d",
           "size_bytes": 280
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/runtime-manifest.json",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/runtime-manifest.json",
           "sha256": "9c9de7351eb92279580231aaef385e7018c9eefb27dc89dec9383470f72c8a10",
           "size_bytes": 1182
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/soak.jsonl",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/soak.jsonl",
           "sha256": "a26dea994a153812238cb9eede73d562466c0fd162a9356708633fb26fd017d6",
           "size_bytes": 164
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/start-requested-at.txt",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/start-requested-at.txt",
           "sha256": "1b6d99eec54b3ef324be659e82541ce903b89c71730644921bf81e66c95fc0ef",
           "size_bytes": 21
         },
         {
-          "relative_path": "maintenance-2x2-20260623T014055Z/soak/D-10min/startup-seconds.txt",
+          "relative_path": "maintenance-2x2-redacted/soak/D-10min/startup-seconds.txt",
           "sha256": "0ce142e93b08fa697cf7d62f912ed916d511174141d2cd69d664b5984e0f7751",
           "size_bytes": 14
         },
         {
-          "relative_path": "maintenance-2x2-latest.path",
+          "relative_path": "maintenance-2x2-latest-redacted.path",
           "sha256": "1ed1bffbeb4a97884b023641b08d317e8a6e5296aa520a9fe34db432740a9160",
           "size_bytes": 82
         },
@@ -2630,19 +2630,19 @@
         "match_count": 55,
         "matched_file_count": 14,
         "matched_files": [
-          "homelander-worktree-audit.json",
-          "maintenance-2x2-20260623T014055Z/analysis/p1-001r-final-report.md",
-          "maintenance-2x2-20260623T014055Z/analysis/p1-001r-matrix-analysis.json",
-          "maintenance-2x2-20260623T014055Z/final-audit.json",
-          "maintenance-2x2-20260623T014055Z/matrix/C/backend.stdout",
-          "maintenance-2x2-20260623T014055Z/matrix/D/backend.stdout",
-          "maintenance-2x2-20260623T014055Z/pre-stop/SHA256SUMS",
-          "maintenance-2x2-20260623T014055Z/pre-stop/live-processes.json",
-          "maintenance-2x2-20260623T014055Z/pre-stop/manifest.txt",
-          "maintenance-2x2-20260623T014055Z/pre-stop/rollback-commands.redacted.sh",
-          "maintenance-2x2-20260623T014055Z/rollback/live-restore/live-processes-redacted.json",
-          "maintenance-2x2-20260623T014055Z/soak/D-10min/backend.stdout",
-          "maintenance-2x2-latest.path",
+          "validation-host-worktree-audit.json",
+          "maintenance-2x2-redacted/analysis/p1-001r-final-report.md",
+          "maintenance-2x2-redacted/analysis/p1-001r-matrix-analysis.json",
+          "maintenance-2x2-redacted/final-audit.json",
+          "maintenance-2x2-redacted/matrix/C/backend.stdout",
+          "maintenance-2x2-redacted/matrix/D/backend.stdout",
+          "maintenance-2x2-redacted/pre-stop/SHA256SUMS",
+          "maintenance-2x2-redacted/pre-stop/live-processes.json",
+          "maintenance-2x2-redacted/pre-stop/manifest.txt",
+          "maintenance-2x2-redacted/pre-stop/rollback-commands.redacted.sh",
+          "maintenance-2x2-redacted/rollback/live-restore/live-processes-redacted.json",
+          "maintenance-2x2-redacted/soak/D-10min/backend.stdout",
+          "maintenance-2x2-latest-redacted.path",
           "phase1-token-parity-analysis.json"
         ],
         "scan_error_count": 0,
@@ -2652,7 +2652,7 @@
         "scanned_file_count": 223,
         "snippets_included": false
       },
-      "root_name": "p1-001r-repair-20260623T005647Z",
+      "root_name": "redacted-repair-evidence",
       "secret_scan": {
         "match_count": 0,
         "matched_file_count": 0,

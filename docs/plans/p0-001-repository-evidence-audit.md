@@ -37,13 +37,13 @@ The full per-file indexes are recorded in the JSON artifact.
 
 | Label | Status | Root name | Files | Dirs | Bytes | Index SHA256 | Secret scan | Local-path scan | Skips / errors |
 | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |
-| `legacy` | complete | `p1-001-maintenance-20260622T202831Z` | 175 | 13 | 4751306 | `2f61b0f7292c018d8012b3b87ba964d0040bcbe93825841fa8fd971c5a908171` | 0 matches, streaming complete | 38 matches in 26 files, streaming complete | 0 / 0 |
-| `repair` | complete | `p1-001r-repair-20260623T005647Z` | 223 | 18 | 76287789 | `925cbf6b4aa5252d98f11f0aa135abfcd52c2ca11182a43710c69a29b6699544` | 0 matches, streaming complete | 55 matches in 14 files, streaming complete | 1 symlink directory / 0 |
+| `legacy` | complete | redacted private evidence ID | 175 | 13 | 4751306 | `redacted-index-sha256` | 0 matches, streaming complete | 38 matches in 26 files, streaming complete | 0 / 0 |
+| `repair` | complete | redacted private evidence ID | 223 | 18 | 76287789 | `925cbf6b4aa5252d98f11f0aa135abfcd52c2ca11182a43710c69a29b6699544` | 0 matches, streaming complete | 55 matches in 14 files, streaming complete | 1 symlink directory / 0 |
 
 Local-path matches are in the raw evidence files only. The committed JSON
 records counts and relative file names, not snippets or absolute matched paths.
-The repair root has one skipped symlink directory, `maintenance-2x2-latest`; no
-read or walk errors were observed in either root.
+The repair root has one skipped symlink directory; no read or walk errors were
+observed in either root.
 
 Committed audit JSON:
 

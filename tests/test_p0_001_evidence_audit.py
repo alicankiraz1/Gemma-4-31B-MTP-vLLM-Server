@@ -350,7 +350,7 @@ def test_evidence_index_records_hashes_and_sanitized_scan_counts(tmp_path):
     root.mkdir()
     (root / "clean.txt").write_text("hello\n", encoding="utf-8")
     (root / "scan.txt").write_text(
-        "/" + "home/homelander/private " + "hf_" + "abcdefghijklmnopqrstuvwxyz\n",
+        "/" + "home/private-user/private " + "hf_" + "abcdefghijklmnopqrstuvwxyz\n",
         encoding="utf-8",
     )
 

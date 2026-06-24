@@ -30,8 +30,8 @@ Current production rollback profile remains:
 
 - Profile: `tp2_2x32_fp8_gpuonly`
 - Mode: eager, `enforce_eager=true`
-- Backend: `127.0.0.1:8012`
-- Gateway: `127.0.0.1:18082`
+- Backend: private GPU host loopback vLLM port
+- Gateway: private GPU host loopback gateway port
 
 The CUDA-graph candidate is `tp2_2x32_fp8_gpuonly_cuda_graph`, which preserves
 the same runtime settings except `enforce_eager=false`. It is a candidate only:
@@ -50,7 +50,7 @@ and
 
 ## Performance Snapshot
 
-Benchmark ID: `homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`
+Benchmark ID: `local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`
 
 This is a local direct vLLM endpoint A/B result and not a universal Gemma 4 MTP performance claim.
 It compares one MTP-enabled vLLM process against a separate no-MTP vLLM process
@@ -88,7 +88,7 @@ The 1024-token MTP-only smoke was approximately 19.9 seconds, or about
 no-MTP speedup test unless a paired no-MTP baseline artefact is present.
 
 See
-[`docs/benchmarks/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md`](docs/benchmarks/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md)
+[`docs/benchmarks/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md`](docs/benchmarks/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.md)
 for the immutable benchmark record and reproduction commands.
 
 ## Verified Results
@@ -120,7 +120,7 @@ above and should not be used as a throughput claim.
 ### MTP Throughput
 
 The current public throughput result is the FP8 GPU-only result identified by
-`homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`. It is a direct vLLM
+`local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`. It is a direct vLLM
 MTP vs no-MTP speedup test, not a gateway-overhead test. Older unscoped
 throughput numbers have been removed from the README; keep any future numbers
 behind an immutable benchmark ID and artefact bundle.
@@ -174,7 +174,7 @@ an unverified high-memory profile:
 - `validation_level`: `unverified`
 
 The `tp2` profile is the unverified 2x40GB+ 32K-context target. It is not the
-Homelander 2x32GB smoke configuration.
+constrained 2x32GB smoke configuration.
 
 Use `tp2_2x32_smoke` to reproduce the constrained 2x RTX 5090 smoke backend:
 
@@ -291,7 +291,7 @@ package versions, selected profile, served model name, and timestamp.
 For the constrained 2x RTX 5090 smoke profile:
 
 ```bash
-vllm-mtp launch --profile tp2_2x32_smoke --host 127.0.0.1 --port 8012 --print-only
+vllm-mtp launch --profile tp2_2x32_smoke --host 127.0.0.1 --port 8000 --print-only
 ```
 
 For raw vLLM exposure, keep `--host 127.0.0.1`. Passing a non-loopback host to
@@ -318,7 +318,7 @@ Verify the vLLM process is reachable, new enough for Gemma 4 MTP, and serving
 the configured target model:
 
 ```bash
-vllm-mtp doctor --profile tp2_2x32_smoke --vllm-base-url http://127.0.0.1:8012
+vllm-mtp doctor --profile tp2_2x32_smoke --vllm-base-url http://127.0.0.1:8000
 ```
 
 Expected output shape (single-line JSON):
@@ -350,9 +350,9 @@ requests routed through the gateway. The user is responsible for launching both
 processes before running a speedup benchmark.
 
 Example FP8 GPU-only reproduction for
-`homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`:
+`local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`:
 Use the immutable artefact flag
-`--artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0` when
+`--artifact-id local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0` when
 sharing generated benchmark evidence.
 
 Terminal 1 (MTP-enabled vLLM on 8001):
@@ -379,8 +379,8 @@ vllm-mtp bench \
     --runs 10 \
     --warmup-runs 2 \
     --artifact-root artifacts/benchmarks \
-    --artifact-id homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0 \
-    --json-output bench-results/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.json
+    --artifact-id local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0 \
+    --json-output bench-results/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0.json
 ```
 
 To reproduce all published output-token targets in one matrix:
@@ -397,7 +397,7 @@ vllm-mtp bench-matrix \
     --output-token-target 512 \
     --runs 10 \
     --warmup-runs 2 \
-    --json-output bench-results/homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0-matrix.json
+    --json-output bench-results/local-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0-matrix.json
 ```
 
 For a matrix sweep over multiple prompts and `num_speculative_tokens`
@@ -416,7 +416,7 @@ vllm-mtp bench-matrix \
     --depth-mtp-url 4=http://127.0.0.1:8003 \
     --runs 10 \
     --warmup-runs 2 \
-    --json-output bench-results/homelander-depth-sweep.json
+    --json-output bench-results/local-depth-sweep.json
 ```
 
 ### Upstream caveat

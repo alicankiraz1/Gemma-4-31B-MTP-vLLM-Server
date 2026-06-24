@@ -71,11 +71,11 @@ def test_build_args_can_disable_mtp_for_baseline():
     assert "--speculative-config" not in args
 
 
-def test_build_args_reproduce_homelander_smoke_profile():
+def test_build_args_reproduce_2x32_smoke_profile():
     args = build_vllm_serve_args(
         profile=_smoke_profile(),
         host="127.0.0.1",
-        port=8012,
+        port=8000,
         served_model_name="gemma-4-31b-mtp",
     )
 
@@ -154,7 +154,7 @@ def test_build_launch_manifest_redacts_secret_argv_values():
 
 
 def test_build_launch_manifest_redacts_private_cwd(monkeypatch):
-    private_cwd = "/" + "home" + "/homelander/private-repo"
+    private_cwd = "/" + "home" + "/private-user/private-repo"
     monkeypatch.setattr("gemma4_mtp_vllm.launch.Path.cwd", lambda: private_cwd)
 
     manifest = build_launch_manifest(
@@ -169,7 +169,7 @@ def test_build_launch_manifest_redacts_private_cwd(monkeypatch):
 
 
 def test_build_launch_manifest_redacts_private_served_model_name():
-    private_name = "/" + "home" + "/homelander/private-served-name"
+    private_name = "/" + "home" + "/private-user/private-served-name"
 
     manifest = build_launch_manifest(
         profile=_smoke_profile(),

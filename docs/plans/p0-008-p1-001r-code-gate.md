@@ -66,13 +66,13 @@ Expected launch argv:
 Expected ports:
 
 - maintenance backends: `8111`, `8112`, `8113`, `8114`
-- restored live backend: `8012`
-- restored live gateway: `18082`
+- restored live backend: `$LIVE_BACKEND_PORT`
+- restored live gateway: `$LIVE_GATEWAY_PORT`
 
 Evidence root:
 
 ```bash
-export EVIDENCE=<operator-evidence-root>/p1-001r-repair-$(date -u +%Y%m%dT%H%M%SZ)
+export EVIDENCE=<operator-evidence-root>/<repair-evidence-id>-$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$EVIDENCE"/{prestop,matrix/{A,B,C,D},compare,recommendation,rollback}
 ```
 
@@ -83,13 +83,13 @@ These are read-only and should be captured before stopping anything:
 ```bash
 git rev-parse HEAD | tee "$EVIDENCE/prestop/git-head.txt"
 git status --short | tee "$EVIDENCE/prestop/git-status.txt"
-ss -H -ltnp 'sport = :8012' | tee "$EVIDENCE/prestop/backend-8012.txt" || true
-ss -H -ltnp 'sport = :18082' | tee "$EVIDENCE/prestop/gateway-18082.txt" || true
+ss -H -ltnp "sport = :$LIVE_BACKEND_PORT" | tee "$EVIDENCE/prestop/backend-port.txt" || true
+ss -H -ltnp "sport = :$LIVE_GATEWAY_PORT" | tee "$EVIDENCE/prestop/gateway-port.txt" || true
 nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory --format=csv | tee "$EVIDENCE/prestop/gpu-processes.csv"
 nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.free,memory.total,utilization.gpu --format=csv | tee "$EVIDENCE/prestop/gpu-state.csv"
 .venv/bin/vllm-mtp doctor \
   --profile tp2_2x32_fp8_gpuonly \
-  --vllm-base-url http://127.0.0.1:8012 \
+  --vllm-base-url "$LIVE_BACKEND_URL" \
   --runtime-manifest-path logs/p1-001/live-runtime-manifest.json \
   --vllm-log-path logs/p1-001/live-vllm.log \
   | tee "$EVIDENCE/prestop/live-doctor.json"
@@ -220,15 +220,15 @@ Restore live services with the existing default profile:
 ```bash
 .venv/bin/vllm-mtp launch \
   --profile tp2_2x32_fp8_gpuonly \
-  --port 8012 \
+  --port "$LIVE_BACKEND_PORT" \
   --manifest-path logs/p1-001/live-runtime-manifest.json \
   > logs/p1-001/live-vllm.log 2>&1 &
 
 .venv/bin/vllm-mtp serve \
   --profile tp2_2x32_fp8_gpuonly \
   --host 127.0.0.1 \
-  --port 18082 \
-  --vllm-base-url http://127.0.0.1:8012 \
+  --port "$LIVE_GATEWAY_PORT" \
+  --vllm-base-url "$LIVE_BACKEND_URL" \
   --runtime-manifest-path logs/p1-001/live-runtime-manifest.json \
   --vllm-log-path logs/p1-001/live-vllm.log \
   > logs/p1-001/live-gateway.log 2>&1 &
@@ -238,7 +238,7 @@ printf '%s\n' "$gateway_pid" > "$EVIDENCE/rollback/live-gateway.pid"
 
 Post-restore validation must include:
 
-- `vllm-mtp doctor` against `127.0.0.1:8012`
+- `vllm-mtp doctor` against `$LIVE_BACKEND_URL`
 - gateway `/health`
 - OpenAI chat and streaming
 - Anthropic messages and streaming

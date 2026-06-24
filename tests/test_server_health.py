@@ -557,7 +557,7 @@ def test_health_keeps_mtp_metrics_when_model_listing_fails():
 
 
 def test_health_redacts_private_model_alias():
-    private_alias = "/" + "home" + "/homelander/private-alias"
+    private_alias = "/" + "home" + "/private-user/private-alias"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":

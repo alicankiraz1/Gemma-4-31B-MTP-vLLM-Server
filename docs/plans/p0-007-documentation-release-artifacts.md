@@ -5,7 +5,7 @@ Make public performance claims reproducible and scoped to immutable evidence.
 ## Scope
 
 - Replace stale README benchmark badges and tables with a benchmark ID scoped to
-  the Homelander FP8 GPU-only direct-vLLM A/B result.
+  the local FP8 GPU-only direct-vLLM A/B result.
 - Document the exact runtime configuration behind the local 3.46x-3.99x
   speedup range.
 - Separate BF16 CPU-offload smoke validation from FP8 GPU-only throughput.
@@ -33,4 +33,4 @@ Make public performance claims reproducible and scoped to immutable evidence.
   internal planning files.
 - Wheel smoke checks the installed package version.
 - Full test, compile, pip, diff, path/secret, wheel, and source archive gates
-  pass locally and on Homelander.
+  pass locally and on the private validation host.
