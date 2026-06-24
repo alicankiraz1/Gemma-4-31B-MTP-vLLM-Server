@@ -1689,6 +1689,51 @@ def _bench_single_compare_payload(
     }
 
 
+def _invoke_bench_compare_payloads(
+    tmp_path: Path,
+    *,
+    control_payload: dict[str, object],
+    candidate_payload: dict[str, object],
+):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    control_json = tmp_path / "control.json"
+    candidate_json = tmp_path / "candidate.json"
+    control_json.write_text(json.dumps(control_payload), encoding="utf-8")
+    candidate_json.write_text(json.dumps(candidate_payload), encoding="utf-8")
+    return runner.invoke(
+        app,
+        [
+            "bench-compare",
+            "--control-json",
+            str(control_json),
+            "--candidate-json",
+            str(candidate_json),
+            "--control-startup-seconds",
+            "55.0",
+            "--candidate-startup-seconds",
+            "52.0",
+            "--control-peak-gpu-memory-mib",
+            "31000",
+            "--control-peak-gpu-memory-mib",
+            "31100",
+            "--candidate-peak-gpu-memory-mib",
+            "31200",
+            "--candidate-peak-gpu-memory-mib",
+            "31300",
+            "--soak-passed",
+            "--soak-seconds",
+            "3600",
+            "--soak-error-count",
+            "0",
+            "--no-oom",
+            "--same-mode-mtp-parity",
+            "passed",
+            "--final-answer-quality",
+            "passed",
+        ],
+    )
+
+
 def _bench_2x2_payload(
     *,
     role: str,
@@ -2559,6 +2604,135 @@ def test_bench_compare_acceptance_non_inferiority_failure(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["recommendation"]["action"] == "do_not_adopt"
     assert "mtp_acceptance_regression" in payload["failure_reasons"]
+
+
+def test_bench_compare_reports_independent_bootstrap_statistics(tmp_path):
+    result = _invoke_bench_compare_payloads(
+        tmp_path,
+        control_payload=_bench_single_compare_payload(
+            label="eager_true",
+            profile="tp2_2x32_fp8_gpuonly",
+            e2e_values=[100.0, 101.0, 102.0, 103.0],
+            acceptance_rates=[0.60, 0.60, 0.60, 0.60],
+            mean_acceptance_lengths=[3.0, 3.0, 3.0, 3.0],
+        ),
+        candidate_payload=_bench_single_compare_payload(
+            label="eager_false",
+            profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+            e2e_values=[110.0, 111.0, 112.0, 113.0],
+            acceptance_rates=[0.599, 0.599, 0.599, 0.599],
+            mean_acceptance_lengths=[2.99, 2.99, 2.99, 2.99],
+        ),
+    )
+
+    assert result.exit_code == 0, result.stdout
+    group = json.loads(result.stdout)["group_comparisons"][0]
+    stats = group["statistical_comparisons"]
+
+    assert stats["e2e_output_tokens_per_second"]["method"] == (
+        "independent_bootstrap_median_difference"
+    )
+    assert stats["e2e_output_tokens_per_second"]["control"]["sample_count"] == 4
+    assert stats["e2e_output_tokens_per_second"]["candidate"]["sample_count"] == 4
+    assert stats["e2e_output_tokens_per_second"]["candidate_minus_control"][
+        "bootstrap_ci_95"
+    ]["low"] > 0
+    assert stats["ttft_ms"]["candidate_minus_control"]["sample_count"] == {
+        "control": 4,
+        "candidate": 4,
+    }
+    assert group["acceptance_non_inferiority"]["status"] == "passed"
+    assert group["mean_acceptance_length_non_inferiority"]["status"] == "passed"
+    assert group["acceptance_non_inferiority"]["candidate_minus_control"]["median"] == (
+        pytest.approx(-0.001)
+    )
+
+
+def test_bench_compare_independent_bootstrap_is_order_invariant(tmp_path):
+    control_payload = _bench_single_compare_payload(
+        label="eager_true",
+        profile="tp2_2x32_fp8_gpuonly",
+        e2e_values=[100.0, 101.0, 102.0, 103.0],
+        acceptance_rates=[0.60, 0.61, 0.62, 0.63],
+        mean_acceptance_lengths=[3.0, 3.1, 3.2, 3.3],
+    )
+    candidate_payload = _bench_single_compare_payload(
+        label="eager_false",
+        profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+        e2e_values=[110.0, 111.0, 112.0, 113.0],
+        acceptance_rates=[0.60, 0.61, 0.62, 0.63],
+        mean_acceptance_lengths=[3.0, 3.1, 3.2, 3.3],
+    )
+    reversed_candidate_payload = _bench_single_compare_payload(
+        label="eager_false",
+        profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+        e2e_values=[113.0, 112.0, 111.0, 110.0],
+        acceptance_rates=[0.63, 0.62, 0.61, 0.60],
+        mean_acceptance_lengths=[3.3, 3.2, 3.1, 3.0],
+    )
+
+    ordered = _invoke_bench_compare_payloads(
+        tmp_path / "ordered",
+        control_payload=control_payload,
+        candidate_payload=candidate_payload,
+    )
+    reversed_result = _invoke_bench_compare_payloads(
+        tmp_path / "reversed",
+        control_payload=control_payload,
+        candidate_payload=reversed_candidate_payload,
+    )
+
+    assert ordered.exit_code == 0, ordered.stdout
+    assert reversed_result.exit_code == 0, reversed_result.stdout
+    ordered_group = json.loads(ordered.stdout)["group_comparisons"][0]
+    reversed_group = json.loads(reversed_result.stdout)["group_comparisons"][0]
+
+    assert ordered_group["acceptance_non_inferiority"][
+        "candidate_minus_control"
+    ] == reversed_group["acceptance_non_inferiority"]["candidate_minus_control"]
+    assert ordered_group["mean_acceptance_length_non_inferiority"][
+        "candidate_minus_control"
+    ] == reversed_group["mean_acceptance_length_non_inferiority"][
+        "candidate_minus_control"
+    ]
+
+
+def test_bench_compare_noisy_overlap_uses_ci_margin(tmp_path):
+    result = _invoke_bench_compare_payloads(
+        tmp_path,
+        control_payload=_bench_single_compare_payload(
+            label="eager_true",
+            profile="tp2_2x32_fp8_gpuonly",
+            e2e_values=[100.0, 101.0, 102.0, 103.0],
+            acceptance_rates=[0.60, 0.61, 0.60, 0.61, 0.60, 0.61, 0.60, 0.61],
+            mean_acceptance_lengths=[3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1],
+        ),
+        candidate_payload=_bench_single_compare_payload(
+            label="eager_false",
+            profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+            e2e_values=[110.0, 111.0, 112.0, 113.0],
+            acceptance_rates=[
+                0.598,
+                0.612,
+                0.604,
+                0.606,
+                0.602,
+                0.608,
+                0.603,
+                0.607,
+            ],
+            mean_acceptance_lengths=[3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1],
+        ),
+    )
+
+    assert result.exit_code == 0, result.stdout
+    group = json.loads(result.stdout)["group_comparisons"][0]
+
+    assert group["acceptance_non_inferiority"]["status"] == "passed"
+    assert group["acceptance_non_inferiority"]["candidate_minus_control"][
+        "bootstrap_ci_95"
+    ]["low"] > -0.01
+    assert "mtp_acceptance_regression" not in group["failure_reasons"]
 
 
 def test_bench_compare_rejects_incomplete_target_matrix(tmp_path):

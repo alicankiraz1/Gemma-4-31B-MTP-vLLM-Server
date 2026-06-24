@@ -7,6 +7,7 @@ import json
 import math
 import os
 import platform
+import random
 import re
 import shlex
 import socket
@@ -65,6 +66,8 @@ P1_001_EXPECTED_GPU_COUNT = 2
 P1_001_MIN_SOAK_SECONDS = 3600.0
 P1_001_ACCEPTANCE_RATE_MARGIN = -0.01
 P1_001_MEAN_ACCEPTANCE_LENGTH_MARGIN = -0.05
+P0_006_BOOTSTRAP_SEED = 1
+P0_006_BOOTSTRAP_SAMPLES = 1000
 BENCHMARK_PROTOCOL_VERSION = 3
 THROUGHPUT_BENCHMARK_LANE = "throughput_fixed_length"
 P0_004_EAGER_PROFILE = "tp2_2x32_fp8_gpuonly"
@@ -2536,8 +2539,38 @@ def _compare_single_endpoint_group(
         "e2e_output_tokens_per_second",
     )
     e2e_speedup = speedup(control_e2e, candidate_e2e)
+    statistical_comparisons = {
+        "e2e_output_tokens_per_second": _independent_metric_comparison(
+            metric_name="e2e_output_tokens_per_second",
+            control_values=_group_metric_values(
+                control_group,
+                "e2e_output_tokens_per_second",
+            ),
+            candidate_values=_group_metric_values(
+                candidate_group,
+                "e2e_output_tokens_per_second",
+            ),
+        ),
+        "ttft_ms": _independent_metric_comparison(
+            metric_name="ttft_ms",
+            control_values=_group_metric_values(control_group, "ttft_ms"),
+            candidate_values=_group_metric_values(candidate_group, "ttft_ms"),
+        ),
+        "tpot_ms": _independent_metric_comparison(
+            metric_name="tpot_ms",
+            control_values=_group_metric_values(control_group, "tpot_ms"),
+            candidate_values=_group_metric_values(candidate_group, "tpot_ms"),
+        ),
+    }
+    e2e_diff_ci_low = _comparison_ci_low(
+        statistical_comparisons["e2e_output_tokens_per_second"]
+    )
     if e2e_speedup is None or e2e_speedup < min_meaningful_speedup:
         failure_reasons.append("meaningful_e2e_speedup_missing")
+    elif e2e_diff_ci_low is None:
+        missing_evidence.append("e2e_statistical_evidence_missing")
+    elif e2e_diff_ci_low <= 0:
+        failure_reasons.append("e2e_speedup_ci_not_positive")
 
     control_ttft = _group_metric_summary(control_group, "ttft_ms")
     candidate_ttft = _group_metric_summary(candidate_group, "ttft_ms")
@@ -2608,6 +2641,7 @@ def _compare_single_endpoint_group(
             "within_backend_repeatability": candidate_repeatability,
         },
         "e2e_speedup": e2e_speedup,
+        "statistical_comparisons": statistical_comparisons,
         "within_backend_repeatability": {
             "control": control_repeatability,
             "candidate": candidate_repeatability,
@@ -2648,34 +2682,22 @@ def _non_inferiority_report(
 ) -> dict[str, object]:
     control_values = _group_mtp_delta_values(control_group, metric_name)
     candidate_values = _group_mtp_delta_values(candidate_group, metric_name)
-    control_clean = _finite_values(control_values)
-    candidate_clean = _finite_values(candidate_values)
-    control_summary = metric_summary(control_clean)
-    candidate_summary = metric_summary(candidate_clean)
-    paired_diffs = [
-        candidate - control
-        for control, candidate in zip(control_values, candidate_values)
-        if isinstance(control, (int, float))
-        and isinstance(candidate, (int, float))
-        and math.isfinite(float(control))
-        and math.isfinite(float(candidate))
-    ]
-    diff_summary = metric_summary(paired_diffs)
-    ci = diff_summary.get("bootstrap_ci_95")
-    ci_low = ci.get("low") if isinstance(ci, dict) else None
-    if not paired_diffs or not isinstance(ci_low, (int, float)):
+    comparison = _independent_metric_comparison(
+        metric_name=metric_name,
+        control_values=control_values,
+        candidate_values=candidate_values,
+    )
+    ci_low = _comparison_ci_low(comparison)
+    if ci_low is None:
         status = "missing"
-    elif float(ci_low) < margin:
+    elif ci_low < margin:
         status = "failed"
     else:
         status = "passed"
     return {
-        "metric": metric_name,
+        **comparison,
         "status": status,
         "margin": margin,
-        "control": control_summary,
-        "candidate": candidate_summary,
-        "candidate_minus_control": diff_summary,
     }
 
 
@@ -2685,6 +2707,189 @@ def _finite_values(values: list[float | None]) -> list[float]:
         for value in values
         if isinstance(value, (int, float)) and math.isfinite(float(value))
     ]
+
+
+def _independent_metric_comparison(
+    *,
+    metric_name: str,
+    control_values: list[float | None],
+    candidate_values: list[float | None],
+    bootstrap_samples: int = P0_006_BOOTSTRAP_SAMPLES,
+    seed: int = P0_006_BOOTSTRAP_SEED,
+) -> dict[str, object]:
+    control_clean = sorted(_finite_values(control_values))
+    candidate_clean = sorted(_finite_values(candidate_values))
+    diff_summary = _independent_bootstrap_median_difference(
+        control_clean,
+        candidate_clean,
+        bootstrap_samples=bootstrap_samples,
+        seed=seed,
+    )
+    return {
+        "metric": metric_name,
+        "method": "independent_bootstrap_median_difference",
+        "bootstrap_seed": seed,
+        "bootstrap_samples": bootstrap_samples,
+        "control": _metric_summary_with_count(control_clean, seed=seed),
+        "candidate": _metric_summary_with_count(candidate_clean, seed=seed),
+        "candidate_minus_control": diff_summary,
+    }
+
+
+def _metric_summary_with_count(
+    values: list[float],
+    *,
+    seed: int,
+) -> dict[str, object]:
+    if not values:
+        return {
+            "median": None,
+            "p10": None,
+            "p90": None,
+            "p95": None,
+            "bootstrap_ci_95": {"low": None, "high": None},
+            "sample_count": 0,
+        }
+    ci = _single_sample_bootstrap_median_ci(values, seed=seed)
+    return {
+        "median": _safe_median(values),
+        "p10": _safe_percentile(values, 10),
+        "p90": _safe_percentile(values, 90),
+        "p95": _safe_percentile(values, 95),
+        "bootstrap_ci_95": {
+            "low": ci[0] if ci is not None else None,
+            "high": ci[1] if ci is not None else None,
+        },
+        "sample_count": len(values),
+    }
+
+
+def _independent_bootstrap_median_difference(
+    control_values: list[float],
+    candidate_values: list[float],
+    *,
+    bootstrap_samples: int,
+    seed: int,
+) -> dict[str, object]:
+    if not control_values or not candidate_values:
+        return {
+            "median": None,
+            "p10": None,
+            "p90": None,
+            "bootstrap_ci_95": {"low": None, "high": None},
+            "sample_count": {
+                "control": len(control_values),
+                "candidate": len(candidate_values),
+            },
+        }
+    observed = _finite_number_or_none(
+        _safe_median(candidate_values) - _safe_median(control_values)
+    )
+    distribution = _bootstrap_median_difference_distribution(
+        control_values,
+        candidate_values,
+        samples=bootstrap_samples,
+        seed=seed,
+    )
+    low = _safe_percentile(distribution, 2.5)
+    high = _safe_percentile(distribution, 97.5)
+    return {
+        "median": observed,
+        "p10": _safe_percentile(distribution, 10),
+        "p90": _safe_percentile(distribution, 90),
+        "bootstrap_ci_95": {"low": low, "high": high},
+        "sample_count": {
+            "control": len(control_values),
+            "candidate": len(candidate_values),
+        },
+    }
+
+
+def _bootstrap_median_difference_distribution(
+    control_values: list[float],
+    candidate_values: list[float],
+    *,
+    samples: int,
+    seed: int,
+) -> list[float]:
+    if len(control_values) == 1 and len(candidate_values) == 1:
+        diff = _finite_number_or_none(candidate_values[0] - control_values[0])
+        return [diff] if diff is not None else []
+    rng = random.Random(seed)
+    distribution = []
+    for _ in range(samples):
+        control_sample = [rng.choice(control_values) for _ in control_values]
+        candidate_sample = [rng.choice(candidate_values) for _ in candidate_values]
+        diff = _finite_number_or_none(
+            _safe_median(candidate_sample) - _safe_median(control_sample)
+        )
+        if diff is not None:
+            distribution.append(diff)
+    return distribution
+
+
+def _single_sample_bootstrap_median_ci(
+    values: list[float],
+    *,
+    seed: int,
+    samples: int = P0_006_BOOTSTRAP_SAMPLES,
+) -> tuple[float, float] | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return (values[0], values[0])
+    rng = random.Random(seed)
+    medians = []
+    for _ in range(samples):
+        sample = [rng.choice(values) for _ in values]
+        median = _finite_number_or_none(_safe_median(sample))
+        if median is not None:
+            medians.append(median)
+    low = _safe_percentile(medians, 2.5)
+    high = _safe_percentile(medians, 97.5)
+    if low is None or high is None:
+        return None
+    return (low, high)
+
+
+def _safe_median(values: list[float]) -> float:
+    ordered = sorted(values)
+    count = len(ordered)
+    midpoint = count // 2
+    if count % 2:
+        return ordered[midpoint]
+    low = ordered[midpoint - 1]
+    high = ordered[midpoint]
+    return low + (high - low) / 2.0
+
+
+def _safe_percentile(
+    values: list[float],
+    percentile_value: float,
+) -> float | None:
+    ordered = sorted(_finite_values(values))
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * (percentile_value / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
+
+
+def _comparison_ci_low(comparison: dict[str, object]) -> float | None:
+    diff_summary = comparison.get("candidate_minus_control")
+    if not isinstance(diff_summary, dict):
+        return None
+    ci = diff_summary.get("bootstrap_ci_95")
+    if not isinstance(ci, dict):
+        return None
+    low = ci.get("low")
+    if not isinstance(low, (int, float)) or not math.isfinite(float(low)):
+        return None
+    return float(low)
 
 
 def _group_within_backend_repeatability(group: dict[str, object]) -> dict[str, object]:
@@ -2785,6 +2990,16 @@ def _group_metric_summary(
             for observation in _group_observations(group)
         ]
     )
+
+
+def _group_metric_values(
+    group: dict[str, object],
+    metric_name: str,
+) -> list[float | None]:
+    return [
+        _nested_float(observation, "result", metric_name)
+        for observation in _group_observations(group)
+    ]
 
 
 def _group_mtp_delta_values(
