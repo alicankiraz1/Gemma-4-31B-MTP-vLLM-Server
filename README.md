@@ -196,6 +196,81 @@ Use `tp2_2x32_fp8_gpuonly_cuda_graph` only for isolated validation. It matches
 default or live profile until the P1-001R recommendation explicitly supports
 adoption and a separate operator approval changes the default.
 
+## DGX Spark Cluster Dry-Run Planning (v1)
+
+`vllm-mtp cluster-plan` is the public-safe planner for 2x+ DGX Spark topologies.
+It prints a complete, reproducible launch plan and evidence contract without
+executing anything.
+
+### Contract
+
+- No live action is performed: no SSH, no `ray start`, no `ray stop`, no process
+  kill, no service restart.
+- Output is explicitly audit-ready and marked as `dry_run_only: true`.
+- Planned command order is deterministic: `ray-head`, worker nodes, then
+  `vllm-serve`.
+- Topology validation is enforced before command generation.
+- Supported transport profiles are `socket` and `roce-a`.
+
+### Topology and public-safe files
+
+Use checked-in examples for review and CI:
+
+- `config/cluster_topologies.example.yaml`
+- `src/gemma4_mtp_vllm/config/cluster_topologies.example.yaml`
+
+Store real hosts, fabric IPs, and inventory in gitignored files:
+
+- `config/cluster_topologies.local.yaml`
+- `config/cluster_topologies.private.yaml`
+
+### CLI flags
+
+Common options:
+
+- Topology: `--profile`, `--topology-file`, `--topology`, `--node-count`
+  (`2|4|6|8`), `--transport-profile socket|roce-a`
+- Runtime/transport: `--runtime-id`, `--head-ip`, `--fabric-iface`,
+  `--fabric-cidr`, `--port`, `--ray-port`
+- vLLM launch binding: `--vllm-bin`, `--venv`, `--model-path`,
+  `--served-model-name`, `--max-model-len`, `--gpu-memory-utilization`,
+  `--max-num-seqs`, `--max-num-batched-tokens`, `--no-mtp`
+- Output: `--format shell|json`, `--json-output`
+
+### v1 output expectations
+
+`--format json` includes at least these top-level fields:
+
+- `schema_version`
+- `dry_run_only`
+- `runtime_id`
+- `profile`
+- `topology`
+- `node_count`
+- `transport_profile`
+- `commands`
+- `resolved_environment_sha256`
+- `resolved_command_sha256`
+- `dry_run_fingerprint`
+- `expected_live_gates`
+
+`--format shell` emits shell-safe command strings for review.
+
+### RoCE-A policy in v1
+
+`socket` adds `NCCL_IB_DISABLE=1`.
+
+`roce-a` keeps explicit transport tuning in-plan with runtime-scoped log paths
+(`NCCL_DEBUG_FILE` under `runtime_id`) and does not auto-add HCA/gid dual-rail
+overrides.
+
+No RoCE-A benchmark is considered a full promotion on its own. Evidence still
+requires generation smoke, queue drain, runtime-bound NCCL log proof, Ray
+continuity, soak, rollback behavior, and a healthy socket fallback.
+
+`/v1/models` is intentionally not treated as sufficient health for RoCE-A in
+this phase.
+
 ## vLLM Requirement
 
 The gateway pins the GPU extra to `vllm == 0.21.0` for Gemma 4 MTP. vLLM
@@ -301,8 +376,11 @@ auth, rate limiting, or CORS protection.
 ### 5. DGX Spark cluster dry-run planning
 
 `vllm-mtp cluster-plan` generates a public-safe dry-run launch plan for 2x and
-larger DGX Spark clusters. It does not start Ray, start vLLM, stop services,
-open SSH sessions, or change any default profile.
+larger DGX Spark clusters. See [DGX Spark Cluster Dry-Run Planning (v1)](#dgx-spark-cluster-dry-run-planning-v1)
+for full behavior, flags, and evidence fields.
+
+It does not start Ray, start vLLM, stop services, open SSH sessions, or change
+any default profile.
 
 The checked-in example topology uses documentation-only addresses. Put real
 cluster inventory in an ignored private topology file such as
@@ -335,9 +413,10 @@ vllm-mtp cluster-plan \
     --format json
 ```
 
-The JSON plan includes `dry_run_only: true`, command and environment hashes,
-the dry-run fingerprint, and live gate expectations. A RoCE-A benchmark is not
-a production promotion by itself: generation smoke, queue drain,
+`--format json` includes `dry_run_only: true`, command and environment hashes,
+the dry-run fingerprint, and live gate expectations.
+
+For RoCE-A, the same gating still applies: generation smoke, queue drain,
 runtime-bound NCCL log proof, Ray continuity, soak, rollback evidence, and a
 preserved socket fallback remain required. `/v1/models` liveness alone is not
 RoCE health.
