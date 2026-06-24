@@ -33,6 +33,7 @@
           },
           "output_token_target": 64,
           "parity_label": "retokenized_visible_output_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "retokenized_visible_output",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -98,6 +99,7 @@
           },
           "output_token_target": 256,
           "parity_label": "retokenized_visible_output_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "retokenized_visible_output",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -163,6 +165,7 @@
           },
           "output_token_target": 512,
           "parity_label": "retokenized_visible_output_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "retokenized_visible_output",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -228,6 +231,7 @@
           },
           "output_token_target": 1024,
           "parity_label": "retokenized_visible_output_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "retokenized_visible_output",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -308,6 +312,7 @@
           },
           "output_token_target": 64,
           "parity_label": "raw_token_ids_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "raw_stream_token_ids",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -375,6 +380,7 @@
           },
           "output_token_target": 256,
           "parity_label": "raw_token_ids_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "raw_stream_token_ids",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -442,6 +448,7 @@
           },
           "output_token_target": 512,
           "parity_label": "raw_token_ids_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "raw_stream_token_ids",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -509,6 +516,7 @@
           },
           "output_token_target": 1024,
           "parity_label": "raw_token_ids_cross_mode_diagnostic",
+          "raw_generation_parity_claim": false,
           "sequence_source": "raw_stream_token_ids",
           "status": "analyzed",
           "within_candidate_repeatability": {
@@ -558,6 +566,7 @@
   "evidence_roots": [
     {
       "directory_count": 13,
+      "errors": [],
       "file_count": 175,
       "files": [
         {
@@ -1440,7 +1449,7 @@
       "index_sha256": "2f61b0f7292c018d8012b3b87ba964d0040bcbe93825841fa8fd971c5a908171",
       "label": "legacy",
       "local_path_scan": {
-        "match_count": 49,
+        "match_count": 38,
         "matched_file_count": 26,
         "matched_files": [
           "candidate/candidate-backend.log",
@@ -1470,6 +1479,11 @@
           "rollback/live-backend-cmdline.txt",
           "rollback/live-gateway-cmdline.txt"
         ],
+        "scan_error_count": 0,
+        "scan_error_files": [],
+        "scan_mode": "streaming",
+        "scan_status": "complete",
+        "scanned_file_count": 175,
         "snippets_included": false
       },
       "root_name": "p1-001-maintenance-20260622T202831Z",
@@ -1477,13 +1491,20 @@
         "match_count": 0,
         "matched_file_count": 0,
         "matched_files": [],
+        "scan_error_count": 0,
+        "scan_error_files": [],
+        "scan_mode": "streaming",
+        "scan_status": "complete",
+        "scanned_file_count": 175,
         "snippets_included": false
       },
       "skipped": [],
+      "status": "complete",
       "total_bytes": 4751306
     },
     {
       "directory_count": 18,
+      "errors": [],
       "file_count": 223,
       "files": [
         {
@@ -2606,7 +2627,7 @@
       "index_sha256": "925cbf6b4aa5252d98f11f0aa135abfcd52c2ca11182a43710c69a29b6699544",
       "label": "repair",
       "local_path_scan": {
-        "match_count": 56,
+        "match_count": 55,
         "matched_file_count": 14,
         "matched_files": [
           "homelander-worktree-audit.json",
@@ -2624,6 +2645,11 @@
           "maintenance-2x2-latest.path",
           "phase1-token-parity-analysis.json"
         ],
+        "scan_error_count": 0,
+        "scan_error_files": [],
+        "scan_mode": "streaming",
+        "scan_status": "complete",
+        "scanned_file_count": 223,
         "snippets_included": false
       },
       "root_name": "p1-001r-repair-20260623T005647Z",
@@ -2631,12 +2657,23 @@
         "match_count": 0,
         "matched_file_count": 0,
         "matched_files": [],
+        "scan_error_count": 0,
+        "scan_error_files": [],
+        "scan_mode": "streaming",
+        "scan_status": "complete",
+        "scanned_file_count": 223,
         "snippets_included": false
       },
-      "skipped": [],
+      "skipped": [
+        {
+          "reason": "symlink_directory",
+          "relative_path": "maintenance-2x2-latest"
+        }
+      ],
+      "status": "complete",
       "total_bytes": 76287789
     }
   ],
-  "generated_at_utc": "2026-06-24T19:41:56+00:00",
+  "generated_at_utc": "2026-06-24T19:54:08+00:00",
   "schema_version": 1
 }

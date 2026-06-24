@@ -65,6 +65,10 @@ def _bench_payload(
     }
 
 
+def _write_payload(path: Path, audit, payload: dict) -> None:
+    path.write_text(audit.json.dumps(payload), encoding="utf-8")
+
+
 def test_legacy_b_vs_d_is_labeled_retokenized_visible_output(tmp_path):
     audit = _load_module()
     control = tmp_path / "eager-true.json"
@@ -81,8 +85,8 @@ def test_legacy_b_vs_d_is_labeled_retokenized_visible_output(tmp_path):
         return_token_ids=None,
         tokens=[1, 2, 9, 4],
     )
-    control.write_text(audit.json.dumps(audit_payload_control), encoding="utf-8")
-    candidate.write_text(audit.json.dumps(audit_payload_candidate), encoding="utf-8")
+    _write_payload(control, audit, audit_payload_control)
+    _write_payload(candidate, audit, audit_payload_candidate)
 
     result = audit.analyze_b_vs_d_pair(
         label="legacy",
@@ -118,31 +122,29 @@ def test_raw_stream_token_ids_and_visible_similarity_are_reported(tmp_path):
     audit = _load_module()
     control = tmp_path / "eager_mtp.json"
     candidate = tmp_path / "graph_mtp.json"
-    control.write_text(
-        audit.json.dumps(
-            _bench_payload(
-                label="eager_mtp",
-                profile="tp2_2x32_fp8_gpuonly",
-                return_token_ids=True,
-                tokens=[5, 6, 7],
-                visible_content="Final answer: Local Gemma trades speed for control.",
-                raw_tokens=True,
-            )
+    _write_payload(
+        control,
+        audit,
+        _bench_payload(
+            label="eager_mtp",
+            profile="tp2_2x32_fp8_gpuonly",
+            return_token_ids=True,
+            tokens=[5, 6, 7],
+            visible_content="Final answer: Local Gemma trades speed for control.",
+            raw_tokens=True,
         ),
-        encoding="utf-8",
     )
-    candidate.write_text(
-        audit.json.dumps(
-            _bench_payload(
-                label="graph_mtp",
-                profile="tp2_2x32_fp8_gpuonly_cuda_graph",
-                return_token_ids=True,
-                tokens=[5, 6, 8],
-                visible_content="Final answer: Local Gemma trades speed for control!",
-                raw_tokens=True,
-            )
+    _write_payload(
+        candidate,
+        audit,
+        _bench_payload(
+            label="graph_mtp",
+            profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+            return_token_ids=True,
+            tokens=[5, 6, 8],
+            visible_content="Final answer: Local Gemma trades speed for control!",
+            raw_tokens=True,
         ),
-        encoding="utf-8",
     )
 
     result = audit.analyze_b_vs_d_pair(
@@ -156,6 +158,190 @@ def test_raw_stream_token_ids_and_visible_similarity_are_reported(tmp_path):
     assert target["parity_label"] == "raw_token_ids_cross_mode_diagnostic"
     assert target["normalized_visible_answer_similarity"]["status"] == "computed"
     assert 0.95 < target["normalized_visible_answer_similarity"]["ratio"] < 1.0
+
+
+def test_missing_file_and_inaccessible_roots_are_invalid(tmp_path, monkeypatch):
+    audit = _load_module()
+    missing = audit.build_evidence_root_index(
+        label="missing",
+        root=tmp_path / "missing",
+        include_file_index=True,
+    )
+    assert missing["status"] == "invalid"
+    assert missing["file_count"] == 0
+    assert missing["errors"] == [{"relative_path": ".", "reason": "root_missing"}]
+
+    file_root = tmp_path / "not-a-dir"
+    file_root.write_text("not a directory\n", encoding="utf-8")
+    file_result = audit.build_evidence_root_index(
+        label="file",
+        root=file_root,
+        include_file_index=True,
+    )
+    assert file_result["status"] == "invalid"
+    assert file_result["errors"] == [
+        {"relative_path": ".", "reason": "root_not_directory"}
+    ]
+
+    directory = tmp_path / "no-access"
+    directory.mkdir()
+    monkeypatch.setattr(audit.os, "access", lambda _path, _mode: False)
+    inaccessible = audit.build_evidence_root_index(
+        label="no-access",
+        root=directory,
+        include_file_index=True,
+    )
+    assert inaccessible["status"] == "inaccessible"
+    assert inaccessible["errors"] == [
+        {"relative_path": ".", "reason": "root_inaccessible"}
+    ]
+
+
+def test_disappearing_file_is_recorded_as_error(tmp_path, monkeypatch):
+    audit = _load_module()
+    root = tmp_path / "evidence"
+    root.mkdir()
+    (root / "gone.txt").write_text("content\n", encoding="utf-8")
+
+    def raise_disappeared(_path):
+        raise OSError("disappeared")
+
+    monkeypatch.setattr(audit, "_sha256_file", raise_disappeared)
+
+    result = audit.build_evidence_root_index(
+        label="sample",
+        root=root,
+        include_file_index=True,
+    )
+
+    assert result["status"] == "complete_with_errors"
+    assert result["file_count"] == 0
+    assert result["skipped"] == [
+        {"relative_path": "gone.txt", "reason": "sha256_read_error"}
+    ]
+    assert result["errors"] == [
+        {
+            "relative_path": "gone.txt",
+            "reason": "sha256_read_error",
+            "error_type": "OSError",
+        }
+    ]
+
+
+def test_partial_raw_and_retokenized_group_is_mixed_source(tmp_path):
+    audit = _load_module()
+    control = tmp_path / "control.json"
+    candidate = tmp_path / "candidate.json"
+    payload = _bench_payload(
+        label="partial",
+        profile="tp2_2x32_fp8_gpuonly",
+        return_token_ids=True,
+        tokens=[1, 2, 3],
+        raw_tokens=True,
+    )
+    payload["groups"][0]["observations"][1] = {
+        "index": 2,
+        "output_sha256": "b" * 64,
+        "output_token_ids": [1, 2, 3],
+        "parity_ready": True,
+        "tokenization_status": "available",
+        "result": {},
+    }
+    _write_payload(control, audit, payload)
+    _write_payload(candidate, audit, payload)
+
+    result = audit.analyze_b_vs_d_pair(
+        label="partial",
+        control_path=control,
+        candidate_path=candidate,
+    )
+
+    target = result["target_diagnostics"][0]
+    assert target["sequence_source"] == "mixed_token_sources"
+    assert target["parity_label"] == "mixed_token_sources_cross_mode_diagnostic"
+    assert target["within_control_repeatability"]["status"] == "mixed_token_sources"
+    assert target["cross_mode_token_diagnostic"]["status"] == "mixed_token_sources"
+    assert target["raw_generation_parity_claim"] is False
+
+
+def test_raw_vs_retokenized_pair_is_mixed_source_not_raw_parity(tmp_path):
+    audit = _load_module()
+    control = tmp_path / "control.json"
+    candidate = tmp_path / "candidate.json"
+    _write_payload(
+        control,
+        audit,
+        _bench_payload(
+            label="raw",
+            profile="tp2_2x32_fp8_gpuonly",
+            return_token_ids=True,
+            tokens=[1, 2, 3],
+            raw_tokens=True,
+        ),
+    )
+    _write_payload(
+        candidate,
+        audit,
+        _bench_payload(
+            label="retokenized",
+            profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+            return_token_ids=None,
+            tokens=[1, 2, 3],
+        ),
+    )
+
+    result = audit.analyze_b_vs_d_pair(
+        label="mixed",
+        control_path=control,
+        candidate_path=candidate,
+    )
+
+    target = result["target_diagnostics"][0]
+    assert target["control_sequence_source"] == "raw_stream_token_ids"
+    assert target["candidate_sequence_source"] == "retokenized_visible_output"
+    assert target["sequence_source"] == "mixed_token_sources"
+    assert target["parity_label"] == "mixed_token_sources_cross_mode_diagnostic"
+    assert target["cross_mode_token_diagnostic"] == {
+        "status": "mixed_token_sources",
+        "reason": "token sources are not comparable",
+    }
+
+
+def test_generated_at_override_is_deterministic():
+    audit = _load_module()
+
+    payload = audit.build_audit_payload(
+        evidence_roots=[],
+        pairs=[],
+        generated_at_utc="2026-06-24T00:00:00+00:00",
+    )
+
+    assert payload["generated_at_utc"] == "2026-06-24T00:00:00+00:00"
+
+
+def test_local_path_scan_matches_volumes_spaces_and_general_unix_paths(tmp_path):
+    audit = _load_module()
+    root = tmp_path / "evidence"
+    root.mkdir()
+    (root / "paths.txt").write_text(
+        "\n".join(
+            [
+                "/" + "Volumes/My Drive/Gemma run/output.json",
+                "/" + "srv/model-cache/run.json",
+                "/" + "Users/Alice/Dir With Space/file.txt",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = audit.build_evidence_root_index(
+        label="paths",
+        root=root,
+        include_file_index=True,
+    )
+
+    assert result["local_path_scan"]["match_count"] == 3
+    assert result["local_path_scan"]["matched_files"] == ["paths.txt"]
 
 
 def test_evidence_index_records_hashes_and_sanitized_scan_counts(tmp_path):
@@ -181,11 +367,21 @@ def test_evidence_index_records_hashes_and_sanitized_scan_counts(tmp_path):
         "match_count": 1,
         "matched_file_count": 1,
         "matched_files": ["scan.txt"],
+        "scanned_file_count": 2,
+        "scan_error_count": 0,
+        "scan_error_files": [],
+        "scan_status": "complete",
+        "scan_mode": "streaming",
         "snippets_included": False,
     }
     assert result["local_path_scan"] == {
         "match_count": 1,
         "matched_file_count": 1,
         "matched_files": ["scan.txt"],
+        "scanned_file_count": 2,
+        "scan_error_count": 0,
+        "scan_error_files": [],
+        "scan_status": "complete",
+        "scan_mode": "streaming",
         "snippets_included": False,
     }

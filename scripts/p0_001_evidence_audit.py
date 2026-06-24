@@ -23,12 +23,16 @@ SECRET_PATTERNS = [
     re.compile(rb"BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY"),
 ]
 LOCAL_PATH_PATTERNS = [
-    re.compile(rb"/Users/[A-Za-z0-9._/@%+=:,~-]+(?:/[A-Za-z0-9._/@%+=:,~-]+)*"),
-    re.compile(rb"/home/[A-Za-z0-9._/@%+=:,~-]+(?:/[A-Za-z0-9._/@%+=:,~-]+)*"),
-    re.compile(rb"/var/folders/[A-Za-z0-9._/@%+=:,~-]+(?:/[A-Za-z0-9._/@%+=:,~-]+)*"),
-    re.compile(rb"file:///[A-Za-z0-9._/@%+=:,~-]+(?:/[A-Za-z0-9._/@%+=:,~-]+)*"),
+    re.compile(rb"(?:/Users|/home|/Volumes|/var/folders)(?:/[^\0\r\n\t\"'<>|]+)+"),
+    re.compile(
+        rb"/(?:tmp|var|opt|mnt|srv|etc|private|Applications|Library|System|"
+        rb"workspace|workspaces|data|root)(?:/[^\0\r\n\t\"'<>|]+)+"
+    ),
+    re.compile(rb"file:///(?:[^\0\r\n\t\"'<>|]+/)+[^\0\r\n\t\"'<>|]+"),
     re.compile(rb"[A-Za-z]:\\Users\\[^\\\r\n\t \"']+"),
 ]
+SCAN_CHUNK_BYTES = 1024 * 1024
+SCAN_OVERLAP_BYTES = 8192
 
 
 def main() -> None:
@@ -58,12 +62,18 @@ def main() -> None:
         action="store_true",
         help="Keep directory-level hashes and scan summaries, but omit per-file rows.",
     )
+    parser.add_argument(
+        "--generated-at-utc",
+        default=None,
+        help="Override generated_at_utc for deterministic audit fixtures.",
+    )
     args = parser.parse_args()
 
     payload = build_audit_payload(
         evidence_roots=[_parse_label_path(item) for item in args.evidence_root],
         pairs=[_parse_pair(item) for item in args.pair],
         include_file_index=not args.omit_file_index,
+        generated_at_utc=args.generated_at_utc,
     )
     print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
 
@@ -73,10 +83,12 @@ def build_audit_payload(
     evidence_roots: list[tuple[str, Path]],
     pairs: list[tuple[str, Path, Path]],
     include_file_index: bool = True,
+    generated_at_utc: str | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
-        "generated_at_utc": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "generated_at_utc": generated_at_utc
+        or dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "evidence_roots": [
             build_evidence_root_index(
                 label=label,
@@ -121,17 +133,87 @@ def build_evidence_root_index(
     root = root.resolve()
     file_rows: list[dict[str, Any]] = []
     skipped_rows: list[dict[str, str]] = []
+    error_rows: list[dict[str, str]] = []
     dir_count = 0
     total_bytes = 0
     secret_scan = ScanSummary()
     local_path_scan = ScanSummary()
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(
-            dirname
-            for dirname in dirnames
-            if not (Path(dirpath) / dirname).is_symlink()
+    base_payload: dict[str, Any] = {
+        "label": label,
+        "root_name": root.name,
+        "file_count": 0,
+        "directory_count": 0,
+        "total_bytes": 0,
+        "index_format": "sha256  size_bytes  relative_path",
+        "index_sha256": _sha256_text(""),
+        "secret_scan": secret_scan.to_dict(),
+        "local_path_scan": local_path_scan.to_dict(),
+        "skipped": skipped_rows,
+        "errors": error_rows,
+    }
+    if not root.exists():
+        error_rows.append({"relative_path": ".", "reason": "root_missing"})
+        base_payload["status"] = "invalid"
+        if include_file_index:
+            base_payload["files"] = []
+        return base_payload
+    if not root.is_dir():
+        error_rows.append({"relative_path": ".", "reason": "root_not_directory"})
+        base_payload["status"] = "invalid"
+        if include_file_index:
+            base_payload["files"] = []
+        return base_payload
+    if not os.access(root, os.R_OK | os.X_OK):
+        error_rows.append({"relative_path": ".", "reason": "root_inaccessible"})
+        base_payload["status"] = "inaccessible"
+        if include_file_index:
+            base_payload["files"] = []
+        return base_payload
+
+    def walk_error(error: OSError) -> None:
+        error_rows.append(
+            {
+                "relative_path": _relative_error_path(root, error.filename),
+                "reason": "walk_error",
+                "error_type": type(error).__name__,
+            }
         )
+
+    for dirpath, dirnames, filenames in os.walk(
+        root,
+        followlinks=False,
+        onerror=walk_error,
+    ):
+        filtered_dirnames = []
+        for dirname in sorted(dirnames):
+            child_dir = Path(dirpath) / dirname
+            try:
+                if child_dir.is_symlink():
+                    skipped_rows.append(
+                        {
+                            "relative_path": _relative_path(root, child_dir),
+                            "reason": "symlink_directory",
+                        }
+                    )
+                    continue
+            except OSError as exc:
+                skipped_rows.append(
+                    {
+                        "relative_path": _relative_path(root, child_dir),
+                        "reason": "directory_stat_error",
+                    }
+                )
+                error_rows.append(
+                    {
+                        "relative_path": _relative_path(root, child_dir),
+                        "reason": "directory_stat_error",
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                continue
+            filtered_dirnames.append(dirname)
+        dirnames[:] = filtered_dirnames
         if Path(dirpath) != root:
             dir_count += 1
         for filename in sorted(filenames):
@@ -148,8 +230,32 @@ def build_evidence_root_index(
             if not stat.S_ISREG(mode):
                 skipped_rows.append({"relative_path": rel, "reason": "non_regular"})
                 continue
-            size = path.stat().st_size
-            digest = _sha256_file(path)
+            try:
+                size = os.stat(path).st_size
+            except OSError as exc:
+                skipped_rows.append({"relative_path": rel, "reason": "stat_error"})
+                error_rows.append(
+                    {
+                        "relative_path": rel,
+                        "reason": "stat_error",
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                continue
+            try:
+                digest = _sha256_file(path)
+            except OSError as exc:
+                skipped_rows.append(
+                    {"relative_path": rel, "reason": "sha256_read_error"}
+                )
+                error_rows.append(
+                    {
+                        "relative_path": rel,
+                        "reason": "sha256_read_error",
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                continue
             total_bytes += size
             file_rows.append(
                 {
@@ -158,15 +264,34 @@ def build_evidence_root_index(
                     "sha256": digest,
                 }
             )
-            data = _read_bytes_for_scan(path)
-            secret_scan.add_file(rel, data, SECRET_PATTERNS)
-            local_path_scan.add_file(rel, data, LOCAL_PATH_PATTERNS)
+            try:
+                scan_counts = _scan_file(
+                    path,
+                    {
+                        "secret": SECRET_PATTERNS,
+                        "local_path": LOCAL_PATH_PATTERNS,
+                    },
+                )
+            except OSError as exc:
+                error_rows.append(
+                    {
+                        "relative_path": rel,
+                        "reason": "scan_read_error",
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                secret_scan.add_error(rel)
+                local_path_scan.add_error(rel)
+            else:
+                secret_scan.add_file_result(rel, scan_counts["secret"])
+                local_path_scan.add_file_result(rel, scan_counts["local_path"])
 
     index_lines = [
         f"{row['sha256']}  {row['size_bytes']}  {row['relative_path']}\n"
         for row in sorted(file_rows, key=lambda item: item["relative_path"])
     ]
     payload: dict[str, Any] = {
+        "status": "complete_with_errors" if error_rows else "complete",
         "label": label,
         "root_name": root.name,
         "file_count": len(file_rows),
@@ -176,7 +301,8 @@ def build_evidence_root_index(
         "index_sha256": _sha256_text("".join(index_lines)),
         "secret_scan": secret_scan.to_dict(),
         "local_path_scan": local_path_scan.to_dict(),
-        "skipped": skipped_rows,
+        "skipped": sorted(skipped_rows, key=lambda item: item["relative_path"]),
+        "errors": sorted(error_rows, key=lambda item: item["relative_path"]),
     }
     if include_file_index:
         payload["files"] = sorted(file_rows, key=lambda item: item["relative_path"])
@@ -186,21 +312,33 @@ def build_evidence_root_index(
 class ScanSummary:
     def __init__(self) -> None:
         self.match_count = 0
+        self.scanned_file_count = 0
+        self.error_count = 0
         self.files: list[str] = []
+        self.error_files: list[str] = []
 
-    def add_file(self, relative_path: str, data: bytes, patterns: list[re.Pattern[bytes]]) -> None:
-        file_matches = 0
-        for pattern in patterns:
-            file_matches += len(pattern.findall(data))
-        if file_matches:
-            self.match_count += file_matches
+    def add_file_result(self, relative_path: str, match_count: int) -> None:
+        self.scanned_file_count += 1
+        if match_count:
+            self.match_count += match_count
             self.files.append(relative_path)
+
+    def add_error(self, relative_path: str) -> None:
+        self.error_count += 1
+        self.error_files.append(relative_path)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "match_count": self.match_count,
             "matched_file_count": len(self.files),
             "matched_files": sorted(self.files),
+            "scanned_file_count": self.scanned_file_count,
+            "scan_error_count": self.error_count,
+            "scan_error_files": sorted(self.error_files),
+            "scan_status": (
+                "complete_with_errors" if self.error_count else "complete"
+            ),
+            "scan_mode": "streaming",
             "snippets_included": False,
         }
 
@@ -253,13 +391,19 @@ def _target_diagnostics(
 
     control_source = _group_token_source(control_group)
     candidate_source = _group_token_source(candidate_group)
-    control_repeatability = _repeatability(control_group)
-    candidate_repeatability = _repeatability(candidate_group)
-    control_tokens = _first_token_sequence(control_group)
-    candidate_tokens = _first_token_sequence(candidate_group)
+    combined_source = _combined_sequence_source(control_source, candidate_source)
+    control_repeatability = _repeatability(control_group, control_source)
+    candidate_repeatability = _repeatability(candidate_group, candidate_source)
+    control_tokens = _first_token_sequence(control_group, control_source)
+    candidate_tokens = _first_token_sequence(candidate_group, candidate_source)
     visible_similarity = _visible_answer_similarity(control_group, candidate_group)
     token_diagnostic: dict[str, Any]
-    if control_tokens is None or candidate_tokens is None:
+    if combined_source in {"mixed_token_sources", "partially_unavailable"}:
+        token_diagnostic = {
+            "status": combined_source,
+            "reason": "token sources are not comparable",
+        }
+    elif control_tokens is None or candidate_tokens is None:
         token_diagnostic = {"status": "missing_token_sequence"}
     else:
         token_diagnostic = _token_sequence_diagnostics(control_tokens, candidate_tokens)
@@ -267,7 +411,8 @@ def _target_diagnostics(
     return {
         "output_token_target": target,
         "status": "analyzed",
-        "sequence_source": _combined_sequence_source(control_source, candidate_source),
+        "raw_generation_parity_claim": False,
+        "sequence_source": combined_source,
         "control_sequence_source": control_source,
         "candidate_sequence_source": candidate_source,
         "within_control_repeatability": control_repeatability,
@@ -284,20 +429,22 @@ def _group_token_source(group: dict[str, Any]) -> str:
         isinstance(request_body, dict) and request_body.get("return_token_ids") is True
     )
     observations = _observations(group)
-    raw_sequences = [
-        _raw_token_sequence(observation)
+    if not observations:
+        return "unavailable"
+    observation_sources = {
+        _observation_token_source(observation, return_token_ids=return_token_ids)
         for observation in observations
-        if _raw_token_sequence(observation) is not None
-    ]
-    output_sequences = [
-        _output_token_sequence(observation)
-        for observation in observations
-        if _output_token_sequence(observation) is not None
-    ]
-    if return_token_ids and raw_sequences and len(raw_sequences) == len(observations):
+    }
+    if observation_sources == {"raw_stream_token_ids"}:
         return "raw_stream_token_ids"
-    if output_sequences:
+    if observation_sources == {"retokenized_visible_output"}:
         return "retokenized_visible_output"
+    if "raw_stream_token_ids" in observation_sources:
+        return "mixed_token_sources"
+    if len(observation_sources - {"unavailable"}) > 1:
+        return "mixed_token_sources"
+    if "retokenized_visible_output" in observation_sources:
+        return "mixed_token_sources"
     return "unavailable"
 
 
@@ -306,7 +453,7 @@ def _combined_sequence_source(control_source: str, candidate_source: str) -> str
         return control_source
     if "unavailable" in {control_source, candidate_source}:
         return "partially_unavailable"
-    return "mixed"
+    return "mixed_token_sources"
 
 
 def _parity_label(control_source: str, candidate_source: str) -> str:
@@ -315,19 +462,26 @@ def _parity_label(control_source: str, candidate_source: str) -> str:
         return "raw_token_ids_cross_mode_diagnostic"
     if source == "retokenized_visible_output":
         return "retokenized_visible_output_cross_mode_diagnostic"
+    if source == "mixed_token_sources":
+        return "mixed_token_sources_cross_mode_diagnostic"
+    if source == "partially_unavailable":
+        return "partially_unavailable_cross_mode_diagnostic"
     return "token_sequence_unavailable_cross_mode_diagnostic"
 
 
-def _repeatability(group: dict[str, Any]) -> dict[str, Any]:
-    sequences = [
-        sequence
-        for sequence in (_token_sequence(observation) for observation in _observations(group))
-        if sequence is not None
-    ]
+def _repeatability(group: dict[str, Any], source: str) -> dict[str, Any]:
+    observations = _observations(group)
+    if source not in {"raw_stream_token_ids", "retokenized_visible_output"}:
+        return {
+            "status": source,
+            "reason": "token source is not repeatability-comparable",
+            "observation_count": len(observations),
+        }
+    sequences = _token_sequences_for_source(group, source)
     if not sequences:
         return {
             "status": "missing",
-            "observation_count": len(_observations(group)),
+            "observation_count": len(observations),
         }
     hashes = [_token_sequence_hash(sequence) for sequence in sequences]
     unique_hashes = sorted(set(hashes))
@@ -437,16 +591,35 @@ def _first_observation_sha(group: dict[str, Any]) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _first_token_sequence(group: dict[str, Any]) -> list[int] | None:
+def _first_token_sequence(group: dict[str, Any], source: str) -> list[int] | None:
+    sequences = _token_sequences_for_source(group, source)
+    return sequences[0] if sequences else None
+
+
+def _token_sequences_for_source(group: dict[str, Any], source: str) -> list[list[int]]:
+    if source not in {"raw_stream_token_ids", "retokenized_visible_output"}:
+        return []
+    sequences: list[list[int]] = []
     for observation in _observations(group):
-        sequence = _token_sequence(observation)
+        if source == "raw_stream_token_ids":
+            sequence = _raw_token_sequence(observation)
+        else:
+            sequence = _output_token_sequence(observation)
         if sequence is not None:
-            return sequence
-    return None
+            sequences.append(sequence)
+    return sequences
 
 
-def _token_sequence(observation: dict[str, Any]) -> list[int] | None:
-    return _raw_token_sequence(observation) or _output_token_sequence(observation)
+def _observation_token_source(
+    observation: dict[str, Any],
+    *,
+    return_token_ids: bool,
+) -> str:
+    if return_token_ids and _raw_token_sequence(observation) is not None:
+        return "raw_stream_token_ids"
+    if _output_token_sequence(observation) is not None:
+        return "retokenized_visible_output"
+    return "unavailable"
 
 
 def _raw_token_sequence(observation: dict[str, Any]) -> list[int] | None:
@@ -526,6 +699,18 @@ def _relative_path(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def _relative_error_path(root: Path, path: str | bytes | None) -> str:
+    if path is None:
+        return "."
+    try:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            return candidate.as_posix()
+        return candidate.relative_to(root).as_posix()
+    except (TypeError, ValueError):
+        return "."
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -538,8 +723,28 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _read_bytes_for_scan(path: Path) -> bytes:
-    return path.read_bytes()
+def _scan_file(
+    path: Path,
+    pattern_groups: dict[str, list[re.Pattern[bytes]]],
+) -> dict[str, int]:
+    counts = {name: 0 for name in pattern_groups}
+    tail = b""
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(SCAN_CHUNK_BYTES)
+            if not chunk:
+                break
+            data = tail + chunk
+            fresh_offset = len(tail)
+            for name, patterns in pattern_groups.items():
+                for pattern in patterns:
+                    counts[name] += sum(
+                        1
+                        for match in pattern.finditer(data)
+                        if match.end() > fresh_offset
+                    )
+            tail = data[-SCAN_OVERLAP_BYTES:]
+    return counts
 
 
 if __name__ == "__main__":

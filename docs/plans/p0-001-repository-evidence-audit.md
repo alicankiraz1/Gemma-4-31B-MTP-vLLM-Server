@@ -35,19 +35,20 @@ B-vs-D eager-vs-graph parity as cross-mode diagnostic evidence.
 Generated with the read-only P0-001 audit helper over the two evidence roots.
 The full per-file indexes are recorded in the JSON artifact.
 
-| Label | Root name | Files | Dirs | Bytes | Index SHA256 | Secret scan | Local-path scan |
-| --- | --- | ---: | ---: | ---: | --- | --- | --- |
-| `legacy` | `p1-001-maintenance-20260622T202831Z` | 175 | 13 | 4751306 | `2f61b0f7292c018d8012b3b87ba964d0040bcbe93825841fa8fd971c5a908171` | 0 matches | 49 matches in 26 files |
-| `repair` | `p1-001r-repair-20260623T005647Z` | 223 | 18 | 76287789 | `925cbf6b4aa5252d98f11f0aa135abfcd52c2ca11182a43710c69a29b6699544` | 0 matches | 56 matches in 14 files |
+| Label | Status | Root name | Files | Dirs | Bytes | Index SHA256 | Secret scan | Local-path scan | Skips / errors |
+| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |
+| `legacy` | complete | `p1-001-maintenance-20260622T202831Z` | 175 | 13 | 4751306 | `2f61b0f7292c018d8012b3b87ba964d0040bcbe93825841fa8fd971c5a908171` | 0 matches, streaming complete | 38 matches in 26 files, streaming complete | 0 / 0 |
+| `repair` | complete | `p1-001r-repair-20260623T005647Z` | 223 | 18 | 76287789 | `925cbf6b4aa5252d98f11f0aa135abfcd52c2ca11182a43710c69a29b6699544` | 0 matches, streaming complete | 55 matches in 14 files, streaming complete | 1 symlink directory / 0 |
 
 Local-path matches are in the raw evidence files only. The committed JSON
 records counts and relative file names, not snippets or absolute matched paths.
-No files were skipped during indexing.
+The repair root has one skipped symlink directory, `maintenance-2x2-latest`; no
+read or walk errors were observed in either root.
 
 Committed audit JSON:
 
-- Size: 110255 bytes
-- SHA256: `b24548caf84dec310d0f935a797999a08f656f8d0770ea7a43fe6f565ed9f3b3`
+- Size: 111523 bytes
+- SHA256: `fbe19da6beb6e646c1dd51767bb3e190322241ae44a3cf3b8b05a74fed9cbe08`
 
 ## Previous B-vs-D Classification
 
