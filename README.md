@@ -7,13 +7,28 @@ HTTP APIs, API-key auth, CORS controls, rate limiting, bounded admission,
 health/readiness diagnostics, release hygiene checks, and Prometheus-style
 gateway metrics.
 
-The current release is an alpha focused on local/private GPU serving. It has
-been validated on a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`.
+The current release is an alpha focused on local/private GPU serving and
+public-safe cluster planning. It has been validated on a 2x NVIDIA GeForce RTX
+5090 host with vLLM `0.21.0`.
 
-## Current P1-001R Status
+## Current Status
 
-The P1-001R repair stream has corrected the benchmark methodology needed to
-decide whether CUDA-graph hybrid can replace the current eager production
+The public `main` branch now includes the P2-001 DGX Spark dry-run planner for
+2x and larger cluster topologies. This planner is intentionally non-executing:
+it produces reviewed Ray/vLLM command plans, transport environment, hashes,
+fingerprints, and live-gate expectations without opening SSH sessions, starting
+Ray, starting vLLM, stopping services, or changing the default profile.
+
+Cluster inventory is public-safe by default:
+
+- checked-in topology examples use documentation-only addresses
+- real hostnames and fabric IPs belong in gitignored `local` or `private`
+  topology files
+- RoCE-A plans require runtime-bound NCCL evidence and retain socket fallback
+  as the safe transport path
+
+The earlier P1-001R repair stream has corrected the benchmark methodology needed
+to decide whether CUDA-graph hybrid can replace the current eager production
 profile. The repo now includes:
 
 - persistent benchmark transport and streaming token instrumentation
@@ -792,6 +807,20 @@ MTP per-generation delta evidence, and streaming slot lifecycle regressions.
 benchmark transport, corrected streaming token instrumentation, automatic 2x2
 comparison, throughput and quality lanes, statistical recommendation gates,
 CUDA graph observation, runtime attestation, and release artifact checks.
+
+### P2-001 Cluster Planner Verification (2026-06-25)
+
+- `.venv/bin/python -m pytest tests/test_cluster.py tests/test_cli.py::test_cluster_plan_command_prints_shell_safe_dry_run tests/test_cli.py::test_cluster_plan_command_prints_deterministic_json tests/test_cli.py::test_cluster_plan_rejects_invalid_inputs tests/test_release_scripts.py::test_gitignore_covers_private_cluster_topologies tests/test_release_scripts.py::test_public_cluster_topology_example_has_no_private_addresses -q` -> `12 passed`
+- `.venv/bin/python -m pytest tests/test_cluster.py tests/test_profiles.py tests/test_launch.py tests/test_cli.py tests/test_release_scripts.py -q` -> `65 passed`
+- `.venv/bin/python -m pytest -q` -> `386 passed, 144 warnings`
+- `.venv/bin/python -m compileall -q src tests` -> no errors
+- `.venv/bin/python -m pip check` -> `No broken requirements found.`
+- `git diff --check` -> no errors
+
+386 tests cover the prior release surface plus DGX Spark dry-run planning,
+socket/RoCE-A transport environment generation, private topology hygiene,
+deterministic shell/JSON output, dry-run fingerprints, and CLI rejection paths
+for invalid cluster inputs.
 
 ## Operational Notes
 
