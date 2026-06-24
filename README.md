@@ -7,9 +7,11 @@ HTTP APIs, API-key auth, CORS controls, rate limiting, bounded admission,
 health/readiness diagnostics, release hygiene checks, and Prometheus-style
 gateway metrics.
 
-The current release is an alpha focused on local/private GPU serving and
-public-safe cluster planning. It has been validated on a 2x NVIDIA GeForce RTX
-5090 host with vLLM `0.21.0`.
+The current release is an alpha for NVIDIA CUDA-backed local serving and
+public-safe DGX Spark cluster planning. The published runtime benchmark evidence
+comes from a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`; the cluster
+planner generalizes the launch plan to 2x and larger DGX Spark-style NVIDIA
+systems without performing live execution.
 
 ## Current Status
 
@@ -26,6 +28,38 @@ Cluster inventory is public-safe by default:
   topology files
 - RoCE-A plans require runtime-bound NCCL evidence and retain socket fallback
   as the safe transport path
+
+## NVIDIA System Compatibility
+
+This repository is not limited to the published 2x RTX 5090 benchmark host.
+That host is the current real-hardware evidence source for the local serving
+profile; it is not the only intended NVIDIA deployment shape.
+
+Supported planning and serving surfaces:
+
+- Single high-memory NVIDIA GPU: `safe80` targets an 80 GB-class CUDA device
+  and remains marked `unverified` until hardware evidence is added.
+- Multi-GPU NVIDIA workstation/server: `tp2`, `tp2_2x32_smoke`, and
+  `tp2_2x32_fp8_gpuonly` cover tensor-parallel local vLLM launch shapes.
+- DGX Spark-style multi-node NVIDIA cluster: `vllm-mtp cluster-plan` builds
+  dry-run Ray/vLLM launch plans for 2, 4, 6, and 8 selected nodes.
+
+DGX Spark assumptions in v1:
+
+- Each selected node is modeled as one GPU by default.
+- `tensor_parallel_size` resolves to the selected total GPU count.
+- `socket` transport is the default fallback path and sets `NCCL_IB_DISABLE=1`.
+- `roce-a` is explicit and emits runtime-bound NCCL environment/log settings.
+- HCA, GID index, and dual-rail overrides are not guessed automatically.
+- The planner does not SSH, start Ray, start vLLM, stop processes, or promote a
+  transport profile.
+
+Compatibility status:
+
+- Local 2x RTX 5090 FP8/MTP serving has benchmark evidence.
+- DGX Spark 2x+ cluster support is currently plan/evidence generation only.
+- Live DGX Spark promotion requires generation smoke, queue drain, NCCL log
+  evidence, Ray continuity, soak, rollback proof, and a healthy socket fallback.
 
 The earlier P1-001R repair stream has corrected the benchmark methodology needed
 to decide whether CUDA-graph hybrid can replace the current eager production
@@ -313,9 +347,13 @@ running `vllm serve` over HTTP.
 ### Prerequisites
 
 - Python `3.10+`. Python `3.12` recommended.
-- NVIDIA CUDA driver `12.x` (CUDA 12.9 wheels available) or AMD ROCm
-  `7.2.1+`. The gateway itself does not require a GPU, but `vllm serve`
-  does.
+- NVIDIA CUDA driver `12.x` for the primary serving path. CUDA 12.9 wheels are
+  supported through the pinned vLLM constraint stack. AMD ROCm `7.2.1+` may be
+  used for compatible vLLM environments, but DGX Spark planning is NVIDIA/Ray/NCCL
+  oriented.
+- The gateway itself does not require a GPU. `vllm serve` requires compatible
+  accelerator hardware. `vllm-mtp cluster-plan` can run on a non-GPU workstation
+  because it only produces dry-run plans.
 - Enough VRAM for the chosen profile (`safe80` needs 80 GB, unverified `tp2`
   targets 2× 40+ GB, `tp2_2x32_smoke` targets 2× 32 GB with CPU offload).
 
@@ -391,7 +429,8 @@ auth, rate limiting, or CORS protection.
 ### 5. DGX Spark cluster dry-run planning
 
 `vllm-mtp cluster-plan` generates a public-safe dry-run launch plan for 2x and
-larger DGX Spark clusters. See [DGX Spark Cluster Dry-Run Planning (v1)](#dgx-spark-cluster-dry-run-planning-v1)
+larger DGX Spark NVIDIA clusters. See
+[DGX Spark Cluster Dry-Run Planning (v1)](#dgx-spark-cluster-dry-run-planning-v1)
 for full behavior, flags, and evidence fields.
 
 It does not start Ray, start vLLM, stop services, open SSH sessions, or change
@@ -413,7 +452,7 @@ vllm-mtp cluster-plan \
     --format shell
 ```
 
-Socket plan örneği örnek bir shell çıktısı üretir.
+Use JSON output when you want captured plan evidence:
 
 ```bash
 vllm-mtp cluster-plan \
