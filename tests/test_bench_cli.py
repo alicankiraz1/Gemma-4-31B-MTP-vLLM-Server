@@ -37,6 +37,7 @@ class _FakeBenchClock:
             for index in range(completion_tokens)
         ]
         self._scheduled.append(self._start + elapsed)
+        self._scheduled.append(self._start + elapsed)
 
 
 def _install_fake_clock(monkeypatch) -> _FakeBenchClock:
@@ -422,8 +423,185 @@ def test_measure_uses_streamed_token_ids_for_tpot_and_raw_parity(monkeypatch):
     assert result.token_count_validation_status == "matched"
     assert result.ttft_ms == pytest.approx(100.0)
     assert result.tpot_ms == pytest.approx((0.2 - 0.1) * 1000.0 / 3)
-    assert result.itl_basis == "chunk_arrival"
+    assert result.tpot_basis == "chunk_arrival_approximation"
+    assert result.itl_basis == "not_reported_chunk_interval_only"
     assert result.inter_token_latency_ms_p50 is None
+
+
+def test_measure_records_sanitized_stream_events_and_separate_ttfts(monkeypatch):
+    times_ns = [
+        0,
+        50_000_000,
+        150_000_000,
+        250_000_000,
+        300_000_000,
+        350_000_000,
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"reasoning":"think",'
+            '"reasoning_content":"compat","token_ids":[101]}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"Hello",'
+            '"token_ids":[102,103]}}]}\n\n'
+            'data: {"choices":[{"delta":{"reasoning":" more",'
+            '"content":" world","token_ids":[104]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._now_ns",
+        lambda: times_ns.pop(0) if times_ns else 350_000_000,
+    )
+
+    text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+        )
+    )
+
+    assert text == "Hello world"
+    assert result.reasoning_text == "think more"
+    assert result.visible_content == "Hello world"
+    assert result.raw_output_token_ids == [101, 102, 103, 104]
+    assert result.ttft_ms == pytest.approx(50.0)
+    assert result.generated_ttft_ms == pytest.approx(50.0)
+    assert result.visible_content_ttft_ms == pytest.approx(150.0)
+    assert result.tpot_ms == pytest.approx((0.25 - 0.05) * 1000.0 / 3)
+    assert result.tpot_basis == "chunk_arrival_approximation"
+    assert result.inter_token_latency_ms_p50 is None
+    assert result.itl_basis == "not_reported_chunk_interval_only"
+    assert result.chunk_timestamps_ns == [
+        50_000_000,
+        150_000_000,
+        250_000_000,
+        300_000_000,
+    ]
+    assert result.token_chunk_events == [
+        {
+            "event_index": 1,
+            "timestamp_ns": 50_000_000,
+            "delta": {
+                "token_ids": [101],
+                "reasoning": "think",
+                "reasoning_content": "compat",
+                "content": "",
+            },
+            "usage": None,
+            "finish_reason": None,
+            "token_count": 1,
+            "multiple_token_ids": False,
+            "payload_sha256": result.token_chunk_events[0]["payload_sha256"],
+        },
+        {
+            "event_index": 2,
+            "timestamp_ns": 150_000_000,
+            "delta": {
+                "token_ids": [102, 103],
+                "reasoning": "",
+                "reasoning_content": "",
+                "content": "Hello",
+            },
+            "usage": None,
+            "finish_reason": None,
+            "token_count": 2,
+            "multiple_token_ids": True,
+            "payload_sha256": result.token_chunk_events[1]["payload_sha256"],
+        },
+        {
+            "event_index": 3,
+            "timestamp_ns": 250_000_000,
+            "delta": {
+                "token_ids": [104],
+                "reasoning": " more",
+                "reasoning_content": "",
+                "content": " world",
+            },
+            "usage": None,
+            "finish_reason": None,
+            "token_count": 1,
+            "multiple_token_ids": False,
+            "payload_sha256": result.token_chunk_events[2]["payload_sha256"],
+        },
+        {
+            "event_index": 4,
+            "timestamp_ns": 300_000_000,
+            "delta": {
+                "token_ids": [],
+                "reasoning": "",
+                "reasoning_content": "",
+                "content": "",
+            },
+            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+            "finish_reason": "stop",
+            "token_count": 0,
+            "multiple_token_ids": False,
+            "payload_sha256": result.token_chunk_events[3]["payload_sha256"],
+        },
+    ]
+    assert result.raw_stream_chunks is None
+    assert result.raw_stream_payloads is None
+    assert result.raw_stream_capture_status == "disabled"
+    assert result.stream_interval_control == "unavailable"
+
+
+def test_measure_marks_missing_usage_invalid_even_with_raw_token_ids(monkeypatch):
+    times = [0.0, 0.1, 0.2]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok","token_ids":[12,13]}}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli.time.perf_counter",
+        lambda: times.pop(0) if times else 0.2,
+    )
+
+    _text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+        )
+    )
+
+    assert result.raw_output_token_ids == [12, 13]
+    assert result.completion_tokens is None
+    assert result.e2e_output_tokens_per_second is None
+    assert result.timing_evidence_valid is False
+    assert result.token_count_validation_status == "usage_missing"
+    assert result.token_count_diagnostics == {
+        "raw_output_token_count": 2,
+        "usage_completion_tokens": None,
+        "stream_parse_error_count": 0,
+    }
+    assert result.ttft_ms is None
+    assert result.generated_ttft_ms is None
+    assert result.tpot_ms is None
 
 
 def test_measure_marks_timing_invalid_when_raw_token_count_mismatches_usage(
@@ -465,9 +643,112 @@ def test_measure_marks_timing_invalid_when_raw_token_count_mismatches_usage(
     assert result.completion_tokens == 3
     assert result.timing_evidence_valid is False
     assert result.token_count_validation_status == "usage_mismatch"
+    assert result.token_count_diagnostics == {
+        "raw_output_token_count": 2,
+        "usage_completion_tokens": 3,
+        "stream_parse_error_count": 0,
+    }
     assert result.ttft_ms is None
     assert result.tpot_ms is None
-    assert result.raw_stream_chunks
+    assert result.raw_stream_chunks is None
+    assert result.raw_stream_payloads is None
+
+
+def test_measure_invalidates_malformed_sse_without_storing_raw_payloads(monkeypatch):
+    times_ns = [0, 100_000_000, 200_000_000, 300_000_000, 400_000_000]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok","token_ids":[12]}}]}\n\n'
+            "data: {not-json}\n\n"
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._now_ns",
+        lambda: times_ns.pop(0) if times_ns else 400_000_000,
+    )
+
+    text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+        )
+    )
+
+    assert text == "ok"
+    assert result.raw_output_token_ids == [12]
+    assert result.timing_evidence_valid is False
+    assert result.token_count_validation_status == "malformed_stream"
+    assert result.stream_parse_errors == [
+        {
+            "event_index": 2,
+            "timestamp_ns": 200_000_000,
+            "error": "JSONDecodeError",
+            "payload_sha256": result.stream_parse_errors[0]["payload_sha256"],
+            "payload_bytes": len("{not-json}".encode()),
+        }
+    ]
+    assert result.raw_stream_payloads is None
+    assert result.raw_stream_chunks is None
+
+
+def test_measure_raw_stream_capture_is_opt_in_and_secret_scanned(monkeypatch):
+    times = [0.0, 0.1, 0.2, 0.3]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            'data: {"choices":[{"delta":{"content":"ok","token_ids":[12]}}],'
+            '"api_key":"sk-proj-secret"}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body.encode(),
+        )
+
+    monkeypatch.setenv("VLLM_MTP_TRANSPORT_MOCK", "1")
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli._mock_transport",
+        lambda: httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr(
+        "gemma4_mtp_vllm.cli.time.perf_counter",
+        lambda: times.pop(0) if times else 0.3,
+    )
+
+    _text, result = asyncio.run(
+        cli_module._measure(
+            "http://mtp:8000",
+            {"model": "gemma-4-31b-mtp", "stream": True},
+            capture_raw_stream=True,
+        )
+    )
+
+    assert result.timing_evidence_valid is True
+    assert result.raw_stream_payloads is None
+    assert result.raw_stream_chunks is None
+    assert result.raw_stream_capture_status == "rejected_by_sanitizer"
+    assert result.raw_stream_capture_diagnostics == {
+        "rejected_event_indices": [1],
+        "reasons": ["secret_pattern"],
+    }
+
 
 
 def test_measure_tokenizer_fallback_uses_visible_text_not_chat_template(monkeypatch):

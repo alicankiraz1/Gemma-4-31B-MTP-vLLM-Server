@@ -20,6 +20,10 @@ class BenchmarkEndpointResult:
     raw_output_token_ids: list[int] | None = None
     reasoning_text: str = ""
     visible_content: str = ""
+    generated_ttft_ms: float | None = None
+    visible_content_ttft_ms: float | None = None
+    token_chunk_events: list[dict[str, Any]] | None = None
+    chunk_timestamps_ns: list[int] | None = None
     token_timing_basis: str = "unavailable"
     tpot_basis: str = "unavailable"
     itl_basis: str = "unavailable"
@@ -27,7 +31,13 @@ class BenchmarkEndpointResult:
     stream_chunk_interval_ms_p95: float | None = None
     timing_evidence_valid: bool = False
     token_count_validation_status: str = "raw_token_ids_missing"
+    token_count_diagnostics: dict[str, Any] | None = None
+    stream_parse_errors: list[dict[str, Any]] | None = None
     raw_stream_chunks: list[dict[str, Any]] | None = None
+    raw_stream_payloads: list[str] | None = None
+    raw_stream_capture_status: str = "disabled"
+    raw_stream_capture_diagnostics: dict[str, Any] | None = None
+    stream_interval_control: str = "unavailable"
     transport_metadata: dict[str, Any] | None = None
 
 

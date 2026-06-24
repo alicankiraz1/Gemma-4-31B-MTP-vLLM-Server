@@ -85,6 +85,7 @@ def build_launch_manifest(
         "profile": profile.name,
         "served_model_name": redact_public_value(served_model_name),
         "enable_mtp": enable_mtp,
+        "stream_interval_control": "unavailable",
         "argv": redact_argv(argv),
         "argv_fingerprint": argv_fingerprint(argv),
         "package_versions": {

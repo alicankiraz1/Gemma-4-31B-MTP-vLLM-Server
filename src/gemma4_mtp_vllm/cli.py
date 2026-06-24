@@ -7,6 +7,7 @@ import json
 import math
 import os
 import platform
+import re
 import shlex
 import socket
 import subprocess
@@ -314,21 +315,34 @@ async def _measure(
     body: dict,
     *,
     client: BenchmarkHttpClient | None = None,
+    capture_raw_stream: bool = False,
 ) -> tuple[str, BenchmarkEndpointResult]:
     if client is None:
         async with BenchmarkClientPool() as pool:
-            return await _measure(base_url, body, client=pool.client_for(base_url))
+            return await _measure(
+                base_url,
+                body,
+                client=pool.client_for(base_url),
+                capture_raw_stream=capture_raw_stream,
+            )
 
-    start = time.perf_counter()
-    generated_token_chunk_times: list[float] = []
-    stream_chunk_times: list[float] = []
+    start_ns = _now_ns()
+    generated_token_chunk_timestamps_ns: list[int] = []
+    visible_content_chunk_timestamps_ns: list[int] = []
+    chunk_timestamps_ns: list[int] = []
     raw_output_token_ids: list[int] = []
     output_parts: list[str] = []
     reasoning_parts: list[str] = []
-    raw_stream_chunks: list[dict[str, object]] = []
+    token_chunk_events: list[dict[str, object]] = []
+    stream_parse_errors: list[dict[str, object]] = []
+    raw_stream_payload_candidates: list[str] = []
+    raw_stream_chunk_candidates: list[dict[str, Any]] = []
+    raw_rejected_event_indices: list[int] = []
+    raw_rejection_reasons: list[str] = []
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     transport_metadata: dict[str, object] | None = None
+    event_index = 0
     async with client.stream(
         "POST",
         "/v1/chat/completions",
@@ -342,46 +356,91 @@ async def _measure(
             raw = line.removeprefix("data: ").strip()
             if raw == "[DONE]":
                 break
-            payload = json.loads(raw)
-            raw_stream_chunks.append(payload)
-            chunk_token_ids = _stream_chunk_token_ids(payload)
-            chunk_reasoning_parts: list[str] = []
-            chunk_content_parts: list[str] = []
-            usage = payload.get("usage") or {}
-            if usage:
-                prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                completion_tokens = int(usage.get("completion_tokens") or 0)
-            for choice in payload.get("choices") or []:
-                delta = choice.get("delta") or {}
-                reasoning = delta.get("reasoning")
-                if reasoning is None:
-                    reasoning = delta.get("reasoning_content")
-                if reasoning:
-                    chunk_reasoning_parts.append(str(reasoning))
-                content = delta.get("content")
-                if content:
-                    chunk_content_parts.append(str(content))
-            if chunk_token_ids or chunk_reasoning_parts or chunk_content_parts:
-                chunk_time = time.perf_counter()
-                if chunk_token_ids:
-                    raw_output_token_ids.extend(chunk_token_ids)
-                    generated_token_chunk_times.append(chunk_time)
-                stream_chunk_times.append(chunk_time)
-                reasoning_parts.extend(chunk_reasoning_parts)
-                output_parts.extend(chunk_content_parts)
-    end = time.perf_counter()
+            event_index += 1
+            timestamp_ns = _now_ns()
+            chunk_timestamps_ns.append(timestamp_ns)
+            if capture_raw_stream:
+                rejection_reasons = _raw_stream_rejection_reasons(raw)
+                if rejection_reasons:
+                    raw_rejected_event_indices.append(event_index)
+                    raw_rejection_reasons.extend(rejection_reasons)
+                raw_stream_payload_candidates.append(raw)
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                stream_parse_errors.append(
+                    _stream_parse_error_event(
+                        raw=raw,
+                        event_index=event_index,
+                        timestamp_ns=timestamp_ns,
+                        error_type=type(exc).__name__,
+                    )
+                )
+                continue
+            if not isinstance(payload, dict):
+                stream_parse_errors.append(
+                    _stream_parse_error_event(
+                        raw=raw,
+                        event_index=event_index,
+                        timestamp_ns=timestamp_ns,
+                        error_type="InvalidPayloadType",
+                    )
+                )
+                continue
+            if capture_raw_stream:
+                raw_stream_chunk_candidates.append(payload)
+            event = _stream_chunk_event(
+                payload,
+                event_index=event_index,
+                timestamp_ns=timestamp_ns,
+                raw=raw,
+            )
+            token_chunk_events.append(event)
+            delta_value = event.get("delta")
+            delta = delta_value if isinstance(delta_value, dict) else {}
+            token_ids_value = delta.get("token_ids")
+            chunk_token_ids = (
+                token_ids_value if isinstance(token_ids_value, list) else []
+            )
+            usage = event["usage"]
+            if isinstance(usage, dict):
+                prompt_token_value = usage.get("prompt_tokens")
+                completion_token_value = usage.get("completion_tokens")
+                if isinstance(prompt_token_value, int):
+                    prompt_tokens = prompt_token_value
+                if isinstance(completion_token_value, int):
+                    completion_tokens = completion_token_value
+            if chunk_token_ids:
+                raw_output_token_ids.extend(chunk_token_ids)
+                generated_token_chunk_timestamps_ns.append(timestamp_ns)
+            reasoning = delta.get("reasoning")
+            reasoning_content = delta.get("reasoning_content")
+            if reasoning:
+                reasoning_parts.append(str(reasoning))
+            elif reasoning_content:
+                reasoning_parts.append(str(reasoning_content))
+            content = delta.get("content")
+            if content:
+                if not visible_content_chunk_timestamps_ns:
+                    visible_content_chunk_timestamps_ns.append(timestamp_ns)
+                output_parts.append(str(content))
+    end_ns = _now_ns()
     text = "".join(output_parts)
     reasoning_text = "".join(reasoning_parts)
     if not raw_output_token_ids and completion_tokens is None and text:
         completion_tokens = await _count_output_tokens(base_url, text, client=client)
-    observed_completion_tokens = completion_tokens
-    token_count_status = "raw_token_ids_missing"
+    observed_completion_tokens: int | None = completion_tokens
+    token_count_status = (
+        "malformed_stream" if stream_parse_errors else "raw_token_ids_missing"
+    )
     timing_evidence_valid = False
     if raw_output_token_ids:
         raw_count = len(raw_output_token_ids)
-        if completion_tokens is None:
+        if stream_parse_errors:
+            observed_completion_tokens = completion_tokens
+        elif completion_tokens is None:
             token_count_status = "usage_missing"
-            observed_completion_tokens = raw_count
+            observed_completion_tokens = None
         elif completion_tokens == raw_count:
             token_count_status = "matched"
             timing_evidence_valid = True
@@ -389,39 +448,74 @@ async def _measure(
         else:
             token_count_status = "usage_mismatch"
             observed_completion_tokens = completion_tokens
-    total_latency_ms = (end - start) * 1000.0
-    ttft_ms = (
-        (generated_token_chunk_times[0] - start) * 1000.0
-        if timing_evidence_valid and generated_token_chunk_times
+    token_count_diagnostics = {
+        "raw_output_token_count": len(raw_output_token_ids),
+        "usage_completion_tokens": completion_tokens,
+        "stream_parse_error_count": len(stream_parse_errors),
+    }
+    raw_stream_payloads: list[str] | None = None
+    raw_stream_chunks: list[dict[str, Any]] | None = None
+    raw_stream_capture_diagnostics: dict[str, object] | None = None
+    if not capture_raw_stream:
+        raw_stream_capture_status = "disabled"
+    elif raw_rejected_event_indices:
+        raw_stream_capture_status = "rejected_by_sanitizer"
+        raw_stream_capture_diagnostics = {
+            "rejected_event_indices": raw_rejected_event_indices,
+            "reasons": _dedupe(raw_rejection_reasons),
+        }
+    else:
+        raw_stream_capture_status = "captured"
+        raw_stream_payloads = raw_stream_payload_candidates
+        raw_stream_chunks = raw_stream_chunk_candidates
+    total_latency_ms = _elapsed_ms(start_ns, end_ns)
+    generated_ttft_ms = (
+        _elapsed_ms(start_ns, generated_token_chunk_timestamps_ns[0])
+        if timing_evidence_valid and generated_token_chunk_timestamps_ns
+        else None
+    )
+    visible_content_ttft_ms = (
+        _elapsed_ms(start_ns, visible_content_chunk_timestamps_ns[0])
+        if timing_evidence_valid and visible_content_chunk_timestamps_ns
         else None
     )
     chunk_intervals_ms = (
         [
-            (right - left) * 1000.0
-            for left, right in zip(stream_chunk_times, stream_chunk_times[1:])
+            _elapsed_ms(left, right)
+            for left, right in zip(chunk_timestamps_ns, chunk_timestamps_ns[1:])
         ]
-        if len(stream_chunk_times) > 1
+        if len(chunk_timestamps_ns) > 1
         else []
     )
-    elapsed_seconds = max(end - start, 0.0)
+    elapsed_seconds = max((end_ns - start_ns) / 1_000_000_000.0, 0.0)
+    throughput_token_count = (
+        observed_completion_tokens
+        if not stream_parse_errors
+        and (timing_evidence_valid or not raw_output_token_ids)
+        else None
+    )
     throughput = (
-        observed_completion_tokens / elapsed_seconds
+        throughput_token_count / elapsed_seconds
         if elapsed_seconds > 0
-        and observed_completion_tokens is not None
-        and observed_completion_tokens > 0
+        and throughput_token_count is not None
+        and throughput_token_count > 0
+        else None
+    )
+    tpot_ms = (
+        _elapsed_ms(
+            generated_token_chunk_timestamps_ns[0],
+            generated_token_chunk_timestamps_ns[-1],
+        )
+        / (len(raw_output_token_ids) - 1)
+        if timing_evidence_valid
+        and len(raw_output_token_ids) > 1
+        and generated_token_chunk_timestamps_ns
         else None
     )
     result = BenchmarkEndpointResult(
         e2e_output_tokens_per_second=throughput,
-        ttft_ms=ttft_ms,
-        tpot_ms=(
-            ((generated_token_chunk_times[-1] - generated_token_chunk_times[0]) * 1000.0)
-            / (len(raw_output_token_ids) - 1)
-            if timing_evidence_valid
-            and ttft_ms is not None
-            and len(raw_output_token_ids) > 1
-            else None
-        ),
+        ttft_ms=generated_ttft_ms,
+        tpot_ms=tpot_ms,
         inter_token_latency_ms_p50=None,
         inter_token_latency_ms_p95=None,
         total_latency_ms=total_latency_ms,
@@ -430,27 +524,149 @@ async def _measure(
         raw_output_token_ids=raw_output_token_ids or None,
         reasoning_text=reasoning_text,
         visible_content=text,
+        generated_ttft_ms=generated_ttft_ms,
+        visible_content_ttft_ms=visible_content_ttft_ms,
+        token_chunk_events=token_chunk_events or None,
+        chunk_timestamps_ns=chunk_timestamps_ns or None,
         token_timing_basis=(
             "raw_token_ids_chunk_arrival" if raw_output_token_ids else "unavailable"
         ),
         tpot_basis=(
-            "approximate_chunk_arrival"
-            if timing_evidence_valid and len(raw_output_token_ids) > 1
+            "chunk_arrival_approximation"
+            if tpot_ms is not None
             else "unavailable"
         ),
         itl_basis=(
-            "chunk_arrival"
-            if timing_evidence_valid and len(raw_output_token_ids) > 1
-            else "unavailable"
+            "not_reported_chunk_interval_only" if raw_output_token_ids else "unavailable"
         ),
         stream_chunk_interval_ms_p50=percentile(chunk_intervals_ms, 50),
         stream_chunk_interval_ms_p95=percentile(chunk_intervals_ms, 95),
         timing_evidence_valid=timing_evidence_valid,
         token_count_validation_status=token_count_status,
+        token_count_diagnostics=token_count_diagnostics,
+        stream_parse_errors=stream_parse_errors or None,
         raw_stream_chunks=raw_stream_chunks,
+        raw_stream_payloads=raw_stream_payloads,
+        raw_stream_capture_status=raw_stream_capture_status,
+        raw_stream_capture_diagnostics=raw_stream_capture_diagnostics,
+        stream_interval_control="unavailable",
         transport_metadata=transport_metadata,
     )
     return text, result
+
+
+def _now_ns() -> int:
+    return int(time.perf_counter() * 1_000_000_000)
+
+
+def _elapsed_ms(start_ns: int, end_ns: int) -> float:
+    return (end_ns - start_ns) / 1_000_000.0
+
+
+def _stream_chunk_event(
+    payload: dict[str, Any],
+    *,
+    event_index: int,
+    timestamp_ns: int,
+    raw: str,
+) -> dict[str, object]:
+    token_ids = _stream_chunk_token_ids(payload)
+    reasoning_parts: list[str] = []
+    reasoning_content_parts: list[str] = []
+    content_parts: list[str] = []
+    finish_reason: str | None = None
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            if finish_reason is None and choice.get("finish_reason") is not None:
+                finish_reason = str(choice.get("finish_reason"))
+            delta = choice.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            reasoning = _coerce_delta_text(delta.get("reasoning"))
+            reasoning_content = _coerce_delta_text(delta.get("reasoning_content"))
+            content = _coerce_delta_text(delta.get("content"))
+            if reasoning:
+                reasoning_parts.append(reasoning)
+            if reasoning_content:
+                reasoning_content_parts.append(reasoning_content)
+            if content:
+                content_parts.append(content)
+    return {
+        "event_index": event_index,
+        "timestamp_ns": timestamp_ns,
+        "delta": {
+            "token_ids": token_ids,
+            "reasoning": "".join(reasoning_parts),
+            "reasoning_content": "".join(reasoning_content_parts),
+            "content": "".join(content_parts),
+        },
+        "usage": _sanitize_usage(payload.get("usage")),
+        "finish_reason": finish_reason,
+        "token_count": len(token_ids),
+        "multiple_token_ids": len(token_ids) > 1,
+        "payload_sha256": _payload_sha256(raw),
+    }
+
+
+def _coerce_delta_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _sanitize_usage(value: object) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    usage: dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        token_count = value.get(key)
+        if isinstance(token_count, int) and not isinstance(token_count, bool):
+            usage[key] = token_count
+    return usage or None
+
+
+def _stream_parse_error_event(
+    *,
+    raw: str,
+    event_index: int,
+    timestamp_ns: int,
+    error_type: str,
+) -> dict[str, object]:
+    return {
+        "event_index": event_index,
+        "timestamp_ns": timestamp_ns,
+        "error": error_type,
+        "payload_sha256": _payload_sha256(raw),
+        "payload_bytes": len(raw.encode("utf-8")),
+    }
+
+
+def _payload_sha256(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+_RAW_STREAM_SECRET_PATTERNS = (
+    re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]+"),
+    re.compile(r"(?i)\"(?:api[_-]?key|authorization|password|secret)\"\s*:"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]+"),
+)
+_RAW_STREAM_EMAIL_PATTERN = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
+
+
+def _raw_stream_rejection_reasons(raw: str) -> list[str]:
+    reasons: list[str] = []
+    if any(pattern.search(raw) for pattern in _RAW_STREAM_SECRET_PATTERNS):
+        reasons.append("secret_pattern")
+    if _RAW_STREAM_EMAIL_PATTERN.search(raw):
+        reasons.append("pii_pattern")
+    return reasons
 
 
 def _coerce_token_ids(value: object) -> list[int]:
@@ -623,6 +839,7 @@ async def _single_bench(
     runs: int,
     warmup_runs: int,
     client_pool: BenchmarkClientPool | None = None,
+    capture_raw_stream: bool = False,
 ) -> list[BenchmarkObservation]:
     if client_pool is None:
         async with BenchmarkClientPool() as pool:
@@ -635,6 +852,7 @@ async def _single_bench(
                 runs=runs,
                 warmup_runs=warmup_runs,
                 client_pool=pool,
+                capture_raw_stream=capture_raw_stream,
             )
 
     mtp_client = client_pool.client_for(mtp_url)
@@ -659,7 +877,12 @@ async def _single_bench(
                 mtp_url,
                 client=mtp_client,
             )
-            mtp_text, mtp_result = await _measure(mtp_url, body, client=mtp_client)
+            mtp_text, mtp_result = await _measure(
+                mtp_url,
+                body,
+                client=mtp_client,
+                capture_raw_stream=capture_raw_stream,
+            )
             mtp_metrics_after = await _fetch_mtp_metrics(
                 mtp_url,
                 client=mtp_client,
@@ -668,18 +891,25 @@ async def _single_bench(
                 baseline_url,
                 body,
                 client=baseline_client,
+                capture_raw_stream=capture_raw_stream,
             )
         else:
             no_text, baseline_result = await _measure(
                 baseline_url,
                 body,
                 client=baseline_client,
+                capture_raw_stream=capture_raw_stream,
             )
             mtp_metrics_before = await _fetch_mtp_metrics(
                 mtp_url,
                 client=mtp_client,
             )
-            mtp_text, mtp_result = await _measure(mtp_url, body, client=mtp_client)
+            mtp_text, mtp_result = await _measure(
+                mtp_url,
+                body,
+                client=mtp_client,
+                capture_raw_stream=capture_raw_stream,
+            )
             mtp_metrics_after = await _fetch_mtp_metrics(
                 mtp_url,
                 client=mtp_client,
@@ -899,6 +1129,7 @@ def bench(
         None,
         "--runtime-manifest-path",
     ),
+    capture_raw_stream: bool = typer.Option(False, "--capture-raw-stream"),
 ) -> None:
     """Compare MTP vs baseline vLLM endpoints for a single prompt."""
     selected = resolve_profile(profile, _profile_set())
@@ -920,6 +1151,7 @@ def bench(
                 runs=runs,
                 warmup_runs=warmup_runs,
                 client_pool=pool,
+                capture_raw_stream=capture_raw_stream,
             )
             metrics_after = (
                 await _fetch_metrics_text(mtp_url, client=mtp_client)
@@ -975,6 +1207,7 @@ def bench_single(
     runs: int = typer.Option(10, "--runs"),
     warmup_runs: int = typer.Option(2, "--warmup-runs"),
     json_output: Optional[str] = typer.Option(None, "--json-output"),
+    capture_raw_stream: bool = typer.Option(False, "--capture-raw-stream"),
 ) -> None:
     """Measure one runtime endpoint for sequential A/B experiments."""
     if not prompt:
@@ -1027,6 +1260,7 @@ def bench_single(
                             runs=runs,
                             warmup_runs=warmup_runs,
                             client_pool=pool,
+                            capture_raw_stream=capture_raw_stream,
                         )
                     except Exception as exc:
                         payload["failure"] = _benchmark_failure_evidence(
@@ -1904,6 +2138,18 @@ def _single_endpoint_group_payload(
                     for observation in observations
                 ]
             ),
+            "generated_ttft_ms": metric_summary(
+                [
+                    _nested_float(observation, "result", "generated_ttft_ms")
+                    for observation in observations
+                ]
+            ),
+            "visible_content_ttft_ms": metric_summary(
+                [
+                    _nested_float(observation, "result", "visible_content_ttft_ms")
+                    for observation in observations
+                ]
+            ),
             "tpot_ms": metric_summary(
                 [
                     _nested_float(observation, "result", "tpot_ms")
@@ -1921,6 +2167,7 @@ async def _single_endpoint_observations(
     runs: int,
     warmup_runs: int,
     client_pool: BenchmarkClientPool | None = None,
+    capture_raw_stream: bool = False,
 ) -> list[dict[str, object]]:
     if client_pool is None:
         async with BenchmarkClientPool() as pool:
@@ -1930,6 +2177,7 @@ async def _single_endpoint_observations(
                 runs=runs,
                 warmup_runs=warmup_runs,
                 client_pool=pool,
+                capture_raw_stream=capture_raw_stream,
             )
 
     client = client_pool.client_for(url)
@@ -1939,7 +2187,12 @@ async def _single_endpoint_observations(
     observations: list[dict[str, object]] = []
     for index in range(1, runs + 1):
         metrics_before = await _fetch_mtp_metrics(url, client=client)
-        text, result = await _measure(url, body, client=client)
+        text, result = await _measure(
+            url,
+            body,
+            client=client,
+            capture_raw_stream=capture_raw_stream,
+        )
         output_token_ids = result.raw_output_token_ids
         tokenization_status = (
             result.token_count_validation_status
@@ -2151,6 +2404,7 @@ def bench_matrix(
     runs: int = typer.Option(10, "--runs"),
     warmup_runs: int = typer.Option(2, "--warmup-runs"),
     json_output: Optional[str] = typer.Option(None, "--json-output"),
+    capture_raw_stream: bool = typer.Option(False, "--capture-raw-stream"),
 ) -> None:
     """Sweep MTP vs baseline across prompts x num_speculative_tokens."""
     if not prompt:
@@ -2211,6 +2465,7 @@ def bench_matrix(
                             runs=runs,
                             warmup_runs=warmup_runs,
                             client_pool=pool,
+                            capture_raw_stream=capture_raw_stream,
                         )
                         summary = BenchmarkSummary(
                             profile=adjusted.name,

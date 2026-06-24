@@ -133,6 +133,8 @@ def test_build_launch_manifest_includes_runtime_fingerprint():
     assert "git_sha" in manifest
     assert "package_versions" in manifest
     assert "gemma4-mtp-vllm" in manifest["package_versions"]
+    assert manifest["stream_interval_control"] == "unavailable"
+    assert "--stream-interval" not in args
 
 
 def test_build_launch_manifest_redacts_secret_argv_values():
