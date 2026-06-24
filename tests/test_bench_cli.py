@@ -1612,6 +1612,281 @@ def _bench_single_compare_payload(
     }
 
 
+def _bench_2x2_payload(
+    *,
+    role: str,
+    token_ids: list[int],
+    text: str = "same answer",
+    request_body: dict[str, object] | None = None,
+    configuration: dict[str, object] | None = None,
+    parity_ready: bool = True,
+) -> dict[str, object]:
+    role_config = {
+        "A": {
+            "profile": "tp2_2x32_fp8_gpuonly",
+            "enforce_eager": True,
+            "enable_mtp": False,
+            "argv": ["vllm", "serve", "--enforce-eager"],
+        },
+        "B": {
+            "profile": "tp2_2x32_fp8_gpuonly",
+            "enforce_eager": True,
+            "enable_mtp": True,
+            "argv": [
+                "vllm",
+                "serve",
+                "--enforce-eager",
+                "--speculative-config",
+                '{"method":"mtp"}',
+            ],
+        },
+        "C": {
+            "profile": "tp2_2x32_fp8_gpuonly_cuda_graph",
+            "enforce_eager": False,
+            "enable_mtp": False,
+            "argv": ["vllm", "serve"],
+        },
+        "D": {
+            "profile": "tp2_2x32_fp8_gpuonly_cuda_graph",
+            "enforce_eager": False,
+            "enable_mtp": True,
+            "argv": [
+                "vllm",
+                "serve",
+                "--speculative-config",
+                '{"method":"mtp"}',
+            ],
+        },
+    }[role]
+    body = request_body or {
+        "model": "gemma-4-31b-mtp",
+        "messages": [{"role": "user", "content": "alpha"}],
+        "max_tokens": 64,
+        "min_tokens": 64,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "return_token_ids": True,
+    }
+    observations = [
+        {
+            "index": index,
+            "result": {
+                "e2e_output_tokens_per_second": 100.0 + index,
+                "finish_reason": "stop",
+            },
+            "output_token_ids": token_ids,
+            "raw_output_token_ids": token_ids,
+            "visible_content": text,
+            "tokenization_status": "matched" if parity_ready else "raw_unavailable",
+            "parity_ready": parity_ready,
+            "task_validator": {"name": "exact", "passed": True},
+        }
+        for index in (1, 2)
+    ]
+    payload = {
+        "benchmark_protocol_version": 3,
+        "benchmark_kind": "single_endpoint_runtime",
+        "status": "complete",
+        "label": role,
+        "configuration": dict(role_config if configuration is None else configuration),
+        "groups": [
+            {
+                "prompt_name": "prompt_1",
+                "prompt": "alpha",
+                "output_token_target": 64,
+                "request_body": body,
+                "observations": observations,
+            }
+        ],
+    }
+    return payload
+
+
+def _write_2x2_inputs(
+    tmp_path: Path,
+    *,
+    a: dict[str, object] | None = None,
+    b: dict[str, object] | None = None,
+    c: dict[str, object] | None = None,
+    d: dict[str, object] | None = None,
+) -> dict[str, Path]:
+    payloads = {
+        "a": a or _bench_2x2_payload(role="A", token_ids=[1, 2, 3]),
+        "b": b or _bench_2x2_payload(role="B", token_ids=[1, 2, 3]),
+        "c": c or _bench_2x2_payload(role="C", token_ids=[1, 2, 3]),
+        "d": d or _bench_2x2_payload(role="D", token_ids=[1, 2, 3]),
+    }
+    paths: dict[str, Path] = {}
+    for name, payload in payloads.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        paths[name] = path
+    return paths
+
+
+def _invoke_bench_2x2(paths: dict[str, Path], *extra_args: str):
+    return runner.invoke(
+        app,
+        [
+            "bench-2x2-compare",
+            "--a-json",
+            str(paths["a"]),
+            "--b-json",
+            str(paths["b"]),
+            "--c-json",
+            str(paths["c"]),
+            "--d-json",
+            str(paths["d"]),
+            *extra_args,
+        ],
+    )
+
+
+def _find_pair(payload: dict[str, object], left: str, right: str) -> dict[str, object]:
+    pairs = payload["pair_comparisons"]
+    assert isinstance(pairs, list)
+    for pair in pairs:
+        if pair["left_role"] == left and pair["right_role"] == right:
+            return pair
+    raise AssertionError(f"missing pair {left}_vs_{right}")
+
+
+def test_bench_2x2_compare_passes_complete_matrix(tmp_path):
+    paths = _write_2x2_inputs(tmp_path)
+    out = tmp_path / "compare.json"
+
+    result = _invoke_bench_2x2(paths, "--json-output", str(out))
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(out.read_text())
+    assert payload["comparison_kind"] == "automatic_2x2_mtp_correctness"
+    assert payload["experiment_status"] == "passed"
+    assert payload["failure_reasons"] == []
+    assert payload["missing_evidence"] == []
+    assert payload["recommendation"]["action"] == "adopt_mtp"
+    assert payload["within_backend_repeatability"]["A"]["status"] == "passed"
+    ab_group = _find_pair(payload, "A", "B")["groups"][0]
+    assert ab_group["raw_token_exact_equal"] is True
+    assert ab_group["normalized_final_text_equal"] is True
+    assert ab_group["finish_reason_equal"] is True
+    assert ab_group["task_validator_equal"] is True
+
+
+def test_bench_2x2_compare_rejects_same_mode_mtp_failure(tmp_path):
+    paths = _write_2x2_inputs(
+        tmp_path,
+        b=_bench_2x2_payload(role="B", token_ids=[1, 9, 3], text="same answer"),
+    )
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "failed"
+    assert payload["recommendation"]["action"] == "do_not_adopt"
+    assert "same_mode_mtp_parity_failed:A_vs_B" in payload["failure_reasons"]
+    ab_pair = _find_pair(payload, "A", "B")
+    assert ab_pair["gate_required"] is True
+    assert ab_pair["gate_passed"] is False
+    assert ab_pair["groups"][0]["raw_token_exact_equal"] is False
+    assert ab_pair["groups"][0]["first_divergence_position_0_based"] == 1
+
+
+def test_bench_2x2_compare_keeps_cross_mode_failure_diagnostic(tmp_path):
+    paths = _write_2x2_inputs(
+        tmp_path,
+        a=_bench_2x2_payload(role="A", token_ids=[1, 2, 3], text="eager answer"),
+        b=_bench_2x2_payload(role="B", token_ids=[1, 2, 3], text="eager answer"),
+        c=_bench_2x2_payload(role="C", token_ids=[9, 9, 9], text="graph answer"),
+        d=_bench_2x2_payload(role="D", token_ids=[9, 9, 9], text="graph answer"),
+    )
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "passed"
+    assert payload["failure_reasons"] == []
+    ac_pair = _find_pair(payload, "A", "C")
+    assert ac_pair["gate_required"] is False
+    assert ac_pair["gate_passed"] is False
+    assert ac_pair["groups"][0]["raw_token_exact_equal"] is False
+    assert ac_pair["groups"][0]["normalized_final_text_equal"] is False
+
+
+def test_bench_2x2_compare_rejects_missing_config(tmp_path):
+    a_payload = _bench_2x2_payload(role="A", token_ids=[1, 2, 3])
+    a_payload.pop("configuration")
+    paths = _write_2x2_inputs(tmp_path, a=a_payload)
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "invalid_experiment"
+    assert payload["recommendation"]["action"] == "do_not_adopt"
+    assert "role_A_configuration_missing" in payload["failure_reasons"]
+
+
+def test_bench_2x2_compare_rejects_wrong_profile_and_argv(tmp_path):
+    paths = _write_2x2_inputs(
+        tmp_path,
+        b=_bench_2x2_payload(
+            role="B",
+            token_ids=[1, 2, 3],
+            configuration={
+                "profile": "tp2_2x32_fp8_gpuonly_cuda_graph",
+                "enforce_eager": True,
+                "enable_mtp": True,
+                "argv": ["vllm", "serve", "--enforce-eager"],
+            },
+        ),
+    )
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "invalid_experiment"
+    assert "role_B_profile_unexpected" in payload["failure_reasons"]
+    assert "role_B_argv_speculative_config_mismatch" in payload["failure_reasons"]
+
+
+def test_bench_2x2_compare_rejects_request_body_mismatch(tmp_path):
+    mismatched_body = {
+        "model": "gemma-4-31b-mtp",
+        "messages": [{"role": "user", "content": "alpha"}],
+        "max_tokens": 65,
+        "min_tokens": 64,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "return_token_ids": True,
+    }
+    paths = _write_2x2_inputs(
+        tmp_path,
+        d=_bench_2x2_payload(
+            role="D",
+            token_ids=[1, 2, 3],
+            request_body=mismatched_body,
+        ),
+    )
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "invalid_experiment"
+    assert "request_body_mismatch:D" in payload["failure_reasons"]
+
+
+def test_bench_2x2_compare_rejects_manual_gate_flags(tmp_path):
+    paths = _write_2x2_inputs(tmp_path)
+
+    result = _invoke_bench_2x2(paths, "--same-mode-mtp-parity", "passed")
+
+    assert result.exit_code == 2
+
+
 def test_bench_compare_adopts_candidate_with_complete_evidence(tmp_path):
     control_json = tmp_path / "control.json"
     candidate_json = tmp_path / "candidate.json"

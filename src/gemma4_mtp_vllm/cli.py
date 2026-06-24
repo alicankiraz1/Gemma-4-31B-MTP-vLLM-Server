@@ -60,6 +60,36 @@ P1_001_MIN_SOAK_SECONDS = 3600.0
 P1_001_ACCEPTANCE_RATE_MARGIN = -0.01
 P1_001_MEAN_ACCEPTANCE_LENGTH_MARGIN = -0.05
 BENCHMARK_PROTOCOL_VERSION = 3
+P0_004_EAGER_PROFILE = "tp2_2x32_fp8_gpuonly"
+P0_004_GRAPH_PROFILE = "tp2_2x32_fp8_gpuonly_cuda_graph"
+P0_004_EXPECTED_ROLES = {
+    "A": {
+        "profile": P0_004_EAGER_PROFILE,
+        "enforce_eager": True,
+        "enable_mtp": False,
+    },
+    "B": {
+        "profile": P0_004_EAGER_PROFILE,
+        "enforce_eager": True,
+        "enable_mtp": True,
+    },
+    "C": {
+        "profile": P0_004_GRAPH_PROFILE,
+        "enforce_eager": False,
+        "enable_mtp": False,
+    },
+    "D": {
+        "profile": P0_004_GRAPH_PROFILE,
+        "enforce_eager": False,
+        "enable_mtp": True,
+    },
+}
+P0_004_PAIR_SPECS = (
+    ("A", "B", "same_mode_mtp", True),
+    ("C", "D", "same_mode_mtp", True),
+    ("A", "C", "cross_mode_eager", False),
+    ("B", "D", "cross_mode_eager", False),
+)
 
 
 def _profile_set() -> ProfileSet:
@@ -1402,6 +1432,30 @@ def bench_compare(
     typer.echo(rendered)
 
 
+@app.command("bench-2x2-compare")
+def bench_2x2_compare(
+    a_json: Path = typer.Option(..., "--a-json"),
+    b_json: Path = typer.Option(..., "--b-json"),
+    c_json: Path = typer.Option(..., "--c-json"),
+    d_json: Path = typer.Option(..., "--d-json"),
+    json_output: Optional[Path] = typer.Option(None, "--json-output"),
+) -> None:
+    """Compare four bench-single JSON payloads as the P0-004 2x2 matrix."""
+    payload = _compare_2x2_benchmarks(
+        {
+            "A": _load_json_payload(a_json),
+            "B": _load_json_payload(b_json),
+            "C": _load_json_payload(c_json),
+            "D": _load_json_payload(d_json),
+        }
+    )
+    rendered = json.dumps(payload, indent=2, allow_nan=False)
+    if json_output is not None:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(rendered, encoding="utf-8")
+    typer.echo(rendered)
+
+
 def _load_json_payload(path: Path) -> dict[str, object]:
     try:
         payload = json.loads(
@@ -1438,6 +1492,390 @@ def _reject_nonfinite_json_numbers(value: object) -> None:
     if isinstance(value, dict):
         for item in value.values():
             _reject_nonfinite_json_numbers(item)
+
+
+def _compare_2x2_benchmarks(
+    payloads: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    invalid_reasons: list[str] = []
+    failure_reasons: list[str] = []
+    missing_evidence: list[str] = []
+    role_reports: dict[str, dict[str, object]] = {}
+    groups_by_role: dict[str, dict[str, dict[str, object]]] = {}
+    repeatability_by_role: dict[str, dict[str, object]] = {}
+
+    for role in ("A", "B", "C", "D"):
+        payload = payloads[role]
+        config, config_failures = _p0_004_role_configuration(payload, role)
+        invalid_reasons.extend(config_failures)
+        if payload.get("status") != "complete":
+            invalid_reasons.append(f"role_{role}_benchmark_incomplete")
+        if payload.get("benchmark_kind") != "single_endpoint_runtime":
+            invalid_reasons.append(f"role_{role}_benchmark_kind_invalid")
+
+        groups = _single_endpoint_groups_by_key(payload)
+        groups_by_role[role] = groups
+        if not groups:
+            invalid_reasons.append(f"role_{role}_groups_missing")
+
+        repeatability = _p0_004_role_repeatability(groups)
+        repeatability_by_role[role] = repeatability
+        if repeatability["status"] == "failed":
+            failure_reasons.append(f"role_{role}_within_backend_repeatability_failed")
+        elif repeatability["status"] == "missing":
+            missing_evidence.append(f"role_{role}_raw_token_evidence_missing")
+
+        role_reports[role] = {
+            "label": payload.get("label"),
+            "configuration": config,
+            "group_count": len(groups),
+            "within_backend_repeatability": repeatability,
+        }
+
+    invalid_reasons.extend(_p0_004_group_matrix_failures(groups_by_role))
+    pair_reports: list[dict[str, object]] = []
+    for left_role, right_role, relation, gate_required in P0_004_PAIR_SPECS:
+        pair_report = _p0_004_pair_report(
+            left_role=left_role,
+            right_role=right_role,
+            relation=relation,
+            gate_required=gate_required,
+            left_groups=groups_by_role[left_role],
+            right_groups=groups_by_role[right_role],
+        )
+        pair_reports.append(pair_report)
+        if gate_required:
+            reason = pair_report.get("gate_reason")
+            pair_name = f"{left_role}_vs_{right_role}"
+            if reason == "deterministic_parity_failed":
+                failure_reasons.append(f"same_mode_mtp_parity_failed:{pair_name}")
+            elif reason != "token_ids_match":
+                missing_evidence.append(f"same_mode_mtp_parity_unavailable:{pair_name}")
+
+    all_failure_reasons = _dedupe(invalid_reasons + failure_reasons)
+    missing_evidence = _dedupe(missing_evidence)
+    if invalid_reasons:
+        experiment_status = "invalid_experiment"
+        action = "do_not_adopt"
+    elif failure_reasons:
+        experiment_status = "failed"
+        action = "do_not_adopt"
+    elif missing_evidence:
+        experiment_status = "insufficient_evidence"
+        action = "insufficient_evidence"
+    else:
+        experiment_status = "passed"
+        action = "adopt_mtp"
+
+    return {
+        "benchmark_protocol_version": BENCHMARK_PROTOCOL_VERSION,
+        "comparison_kind": "automatic_2x2_mtp_correctness",
+        "experiment_status": experiment_status,
+        "roles": {
+            role: dict(P0_004_EXPECTED_ROLES[role]) for role in ("A", "B", "C", "D")
+        },
+        "role_reports": role_reports,
+        "within_backend_repeatability": repeatability_by_role,
+        "pair_comparisons": pair_reports,
+        "failure_reasons": all_failure_reasons,
+        "missing_evidence": missing_evidence,
+        "recommendation": {"action": action},
+    }
+
+
+def _p0_004_role_configuration(
+    payload: dict[str, object],
+    role: str,
+) -> tuple[dict[str, object] | None, list[str]]:
+    expected = P0_004_EXPECTED_ROLES[role]
+    source = payload.get("configuration")
+    if not isinstance(source, dict):
+        source = payload.get("launch_manifest")
+    if not isinstance(source, dict):
+        return None, [f"role_{role}_configuration_missing"]
+
+    failures: list[str] = []
+    profile = source.get("profile")
+    enforce_eager = source.get("enforce_eager")
+    enable_mtp = source.get("enable_mtp")
+    if profile != expected["profile"]:
+        failures.append(f"role_{role}_profile_unexpected")
+    if enforce_eager is not expected["enforce_eager"]:
+        failures.append(f"role_{role}_enforce_eager_unexpected")
+    if enable_mtp is not expected["enable_mtp"]:
+        failures.append(f"role_{role}_enable_mtp_unexpected")
+
+    argv = source.get("argv")
+    normalized: dict[str, object] = {
+        "profile": profile,
+        "enforce_eager": enforce_eager,
+        "enable_mtp": enable_mtp,
+    }
+    if argv is not None:
+        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+            failures.append(f"role_{role}_argv_invalid")
+        else:
+            normalized["argv"] = list(argv)
+            if _argv_has_option(argv, "--enforce-eager") is not expected[
+                "enforce_eager"
+            ]:
+                failures.append(f"role_{role}_argv_enforce_eager_mismatch")
+            if _argv_has_option(argv, "--speculative-config") is not expected[
+                "enable_mtp"
+            ]:
+                failures.append(f"role_{role}_argv_speculative_config_mismatch")
+    return normalized, failures
+
+
+def _argv_has_option(argv: list[str], option: str) -> bool:
+    return any(item == option or item.startswith(f"{option}=") for item in argv)
+
+
+def _p0_004_role_repeatability(
+    groups: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    if not groups:
+        return {"status": "missing", "reason": "groups_missing", "groups": []}
+    group_reports: list[dict[str, object]] = []
+    statuses: list[str] = []
+    for key, group in sorted(groups.items()):
+        report = dict(_group_within_backend_repeatability(group))
+        report["group_key"] = key
+        group_reports.append(report)
+        status = report.get("status")
+        if isinstance(status, str):
+            statuses.append(status)
+    if "failed" in statuses:
+        status = "failed"
+    elif "missing" in statuses or len(statuses) != len(groups):
+        status = "missing"
+    else:
+        status = "passed"
+    return {"status": status, "groups": group_reports}
+
+
+def _p0_004_group_matrix_failures(
+    groups_by_role: dict[str, dict[str, dict[str, object]]],
+) -> list[str]:
+    failures: list[str] = []
+    all_keys = sorted({key for groups in groups_by_role.values() for key in groups})
+    for key in all_keys:
+        groups_for_key = {
+            role: groups.get(key) for role, groups in groups_by_role.items()
+        }
+        for role, group in groups_for_key.items():
+            if group is None:
+                failures.append(f"missing_group:{role}:{key}")
+        present = {role: group for role, group in groups_for_key.items() if group}
+        if len(present) != len(groups_by_role):
+            continue
+        baseline_body = present["A"].get("request_body")
+        if not isinstance(baseline_body, dict):
+            failures.append(f"request_body_missing:A")
+            continue
+        for role in ("B", "C", "D"):
+            request_body = present[role].get("request_body")
+            if not isinstance(request_body, dict):
+                failures.append(f"request_body_missing:{role}")
+            elif request_body != baseline_body:
+                failures.append(f"request_body_mismatch:{role}")
+    if not all_keys:
+        failures.append("group_matrix_missing")
+    return failures
+
+
+def _p0_004_pair_report(
+    *,
+    left_role: str,
+    right_role: str,
+    relation: str,
+    gate_required: bool,
+    left_groups: dict[str, dict[str, object]],
+    right_groups: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    groups: list[dict[str, object]] = []
+    gate_reasons: list[str] = []
+    for key in sorted(set(left_groups) & set(right_groups)):
+        left_group = left_groups[key]
+        right_group = right_groups[key]
+        group_report = _p0_004_pair_group_report(
+            key=key,
+            left_group=left_group,
+            right_group=right_group,
+        )
+        groups.append(group_report)
+        reason = group_report.get("raw_token_parity_reason")
+        if isinstance(reason, str):
+            gate_reasons.append(reason)
+
+    if not groups:
+        gate_passed = False
+        gate_reason = "no_comparable_groups"
+    elif all(reason == "token_ids_match" for reason in gate_reasons):
+        gate_passed = True
+        gate_reason = "token_ids_match"
+    elif "deterministic_parity_failed" in gate_reasons:
+        gate_passed = False
+        gate_reason = "deterministic_parity_failed"
+    else:
+        gate_passed = False
+        gate_reason = gate_reasons[0] if gate_reasons else "token_parity_unavailable"
+
+    return {
+        "left_role": left_role,
+        "right_role": right_role,
+        "relation": relation,
+        "gate_required": gate_required,
+        "gate_passed": gate_passed,
+        "gate_reason": gate_reason,
+        "groups": groups,
+    }
+
+
+def _p0_004_pair_group_report(
+    *,
+    key: str,
+    left_group: dict[str, object],
+    right_group: dict[str, object],
+) -> dict[str, object]:
+    token_parity = _group_token_parity(left_group, right_group)
+    left_observation = _first_group_observation(left_group)
+    right_observation = _first_group_observation(right_group)
+    left_tokens = _raw_tokens_from_observation(left_observation)
+    right_tokens = _raw_tokens_from_observation(right_observation)
+    if left_tokens is not None and right_tokens is not None:
+        token_diagnostics = _token_sequence_diagnostics(left_tokens, right_tokens)
+    else:
+        token_diagnostics = {
+            "exact_match": False,
+            "control_length": None,
+            "candidate_length": None,
+            "output_length_equal": None,
+            "longest_common_prefix_tokens": None,
+            "first_divergence_position_0_based": None,
+            "matching_token_percentage_same_position_over_max_len": None,
+        }
+
+    left_text = _observation_visible_text(left_observation)
+    right_text = _observation_visible_text(right_observation)
+    left_normalized = _normalize_final_text(left_text)
+    right_normalized = _normalize_final_text(right_text)
+    left_finish_reason = _observation_finish_reason(left_observation)
+    right_finish_reason = _observation_finish_reason(right_observation)
+    validator_equal = _task_validator_equal(left_observation, right_observation)
+
+    return {
+        "group_key": key,
+        "prompt_name": left_group.get("prompt_name"),
+        "output_token_target": left_group.get("output_token_target"),
+        "raw_token_exact_equal": token_parity.get("deterministic_parity") is True,
+        "raw_token_parity_reason": token_parity.get("reason"),
+        "output_length_equal": token_diagnostics["output_length_equal"],
+        "left_output_token_length": token_diagnostics["control_length"],
+        "right_output_token_length": token_diagnostics["candidate_length"],
+        "longest_common_prefix_tokens": token_diagnostics[
+            "longest_common_prefix_tokens"
+        ],
+        "first_divergence_position_0_based": token_diagnostics[
+            "first_divergence_position_0_based"
+        ],
+        "matching_token_percentage_same_position_over_max_len": token_diagnostics[
+            "matching_token_percentage_same_position_over_max_len"
+        ],
+        "normalized_final_text_equal": left_normalized == right_normalized,
+        "final_text_edit_distance": _edit_distance(left_normalized, right_normalized),
+        "finish_reason_equal": left_finish_reason == right_finish_reason,
+        "task_validator_equal": validator_equal,
+    }
+
+
+def _first_group_observation(group: dict[str, object]) -> dict[str, object] | None:
+    observations = _group_observations(group)
+    return observations[0] if observations else None
+
+
+def _raw_tokens_from_observation(
+    observation: dict[str, object] | None,
+) -> list[int] | None:
+    if observation is None or not observation.get("parity_ready"):
+        return None
+    tokens = observation.get("output_token_ids")
+    if not _is_token_id_sequence(tokens):
+        return None
+    return list(tokens)
+
+
+def _observation_visible_text(observation: dict[str, object] | None) -> str:
+    if observation is None:
+        return ""
+    for key in ("visible_content", "output_text", "text"):
+        value = observation.get(key)
+        if isinstance(value, str):
+            return value
+    result = observation.get("result")
+    if isinstance(result, dict):
+        value = result.get("visible_content")
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def _normalize_final_text(value: str) -> str:
+    return " ".join(value.split()).strip()
+
+
+def _observation_finish_reason(observation: dict[str, object] | None) -> object:
+    if observation is None:
+        return None
+    value = observation.get("finish_reason")
+    if value is not None:
+        return value
+    result = observation.get("result")
+    if isinstance(result, dict):
+        return result.get("finish_reason")
+    return None
+
+
+def _task_validator_equal(
+    left_observation: dict[str, object] | None,
+    right_observation: dict[str, object] | None,
+) -> bool | None:
+    left = _task_validator_payload(left_observation)
+    right = _task_validator_payload(right_observation)
+    if left is None and right is None:
+        return None
+    return left == right
+
+
+def _task_validator_payload(observation: dict[str, object] | None) -> object:
+    if observation is None:
+        return None
+    for key in ("task_validator", "task_validation", "validator"):
+        value = observation.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _edit_distance(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            insertion = current[right_index - 1] + 1
+            deletion = previous[right_index] + 1
+            substitution = previous[right_index - 1] + (
+                0 if left_char == right_char else 1
+            )
+            current.append(min(insertion, deletion, substitution))
+        previous = current
+    return previous[-1]
 
 
 def _compare_single_endpoint_benchmarks(
