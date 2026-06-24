@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 from gemma4_mtp_vllm.quality_suite import (
     QualityTask,
     build_quality_request_body,
@@ -139,6 +141,39 @@ def test_patch_apply_validation_rejects_unexpected_paths_before_git_apply(monkey
     assert result["diagnostics"]["unexpected_paths"] == ["secrets.py"]
 
 
+def test_patch_apply_validation_rejects_git_metadata_before_git_apply(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("git apply should not run for unsupported metadata")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.quality_suite.subprocess.run", fail_run)
+    symlink_patch = """diff --git a/calc.py b/calc.py
+new file mode 120000
+--- /dev/null
++++ b/calc.py
+@@ -0,0 +1 @@
++/etc/passwd
+"""
+    copy_patch = """diff --git a/calc.py b/calc.py
+copy to conftest.py
+--- a/calc.py
++++ b/calc.py
+@@ -1 +1 @@
+-VALUE = 1
++VALUE = 2
+"""
+
+    symlink_result = validate_patch_apply(
+        symlink_patch,
+        files={"calc.py": "VALUE = 1\n"},
+    )
+    copy_result = validate_patch_apply(copy_patch, files={"calc.py": "VALUE = 1\n"})
+
+    assert symlink_result["passed"] is False
+    assert symlink_result["diagnostics"]["error"] == "unsupported_patch_metadata"
+    assert copy_result["passed"] is False
+    assert copy_result["diagnostics"]["error"] == "unsupported_patch_metadata"
+
+
 def test_python_unit_validation_accepts_safe_solution():
     task = QualityTask(
         task_id="py_unit_safe",
@@ -156,6 +191,8 @@ def test_python_unit_validation_accepts_safe_solution():
 
     assert result["passed"] is True
     assert result["executable_static_pass"] is True
+    assert "stdout_tail" not in result["diagnostics"]
+    assert "stderr_tail" not in result["diagnostics"]
 
 
 def test_python_unit_validation_rejects_unsafe_code_before_pytest(monkeypatch):
@@ -179,4 +216,64 @@ def test_python_unit_validation_rejects_unsafe_code_before_pytest(monkeypatch):
 
     assert result["passed"] is False
     assert result["diagnostics"]["error"] == "unsafe_python_code"
-    assert "import_not_allowed:os" in result["diagnostics"]["violations"]
+    assert "import_not_allowed" in result["diagnostics"]["violations"]
+    assert "call_not_allowed:open" in result["diagnostics"]["violations"]
+
+
+def test_python_unit_validation_rejects_attrgetter_escape_before_runner(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("runner should not run for AST escape attempts")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.quality_suite.subprocess.run", fail_run)
+    task = QualityTask(
+        task_id="py_unit_attrgetter",
+        category="coding_python_unit",
+        validator="python_unit",
+        messages=[],
+        tests={"test_solution.py": "from solution import load\n"},
+    )
+
+    result = evaluate_quality_task(
+        task,
+        content=(
+            "import operator\n\n"
+            "def load():\n"
+            "    return operator.attrgetter('__globals__')(load)\n"
+        ),
+        finish_reason="stop",
+    )
+
+    assert result["passed"] is False
+    assert result["diagnostics"]["error"] == "unsafe_python_code"
+    assert "import_not_allowed" in result["diagnostics"]["violations"]
+    assert "string_token_not_allowed:__" in result["diagnostics"]["violations"]
+
+
+def test_python_unit_validation_timeout_is_task_failure_without_raw_output(monkeypatch):
+    def timeout_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=args[0],
+            timeout=kwargs["timeout"],
+            output="RAW MODEL OUTPUT",
+            stderr="RAW STDERR",
+        )
+
+    monkeypatch.setattr("gemma4_mtp_vllm.quality_suite.subprocess.run", timeout_run)
+    task = QualityTask(
+        task_id="py_unit_timeout",
+        category="coding_python_unit",
+        validator="python_unit",
+        messages=[],
+        tests={"test_solution.py": "from solution import identity\n"},
+    )
+
+    result = evaluate_quality_task(
+        task,
+        content="def identity(value):\n    return value\n",
+        finish_reason="stop",
+    )
+
+    assert result["passed"] is False
+    assert result["diagnostics"]["error"] == "timeout"
+    assert "RAW MODEL OUTPUT" not in str(result["diagnostics"])
+    assert "stdout_sha256" in result["diagnostics"]

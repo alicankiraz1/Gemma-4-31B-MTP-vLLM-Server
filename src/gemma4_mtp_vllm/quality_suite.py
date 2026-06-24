@@ -18,16 +18,80 @@ QUALITY_BENCHMARK_LANE = "quality_natural_eos"
 QUALITY_SEED = 1
 QUALITY_MAX_TOKENS = 384
 
-SAFE_IMPORT_MODULES = frozenset(
+SAFE_BUILTIN_NAMES = frozenset(
     {
-        "collections",
-        "functools",
-        "itertools",
-        "math",
-        "operator",
-        "re",
-        "statistics",
-        "string",
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "dict",
+        "enumerate",
+        "float",
+        "int",
+        "isinstance",
+        "len",
+        "list",
+        "max",
+        "min",
+        "range",
+        "reversed",
+        "round",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+    }
+)
+SAFE_EXCEPTION_NAMES = frozenset(
+    {"Exception", "ValueError", "TypeError", "ZeroDivisionError"}
+)
+SAFE_ATTRIBUTE_NAMES = frozenset(
+    {
+        "append",
+        "casefold",
+        "count",
+        "endswith",
+        "extend",
+        "get",
+        "index",
+        "isalnum",
+        "isalpha",
+        "isdigit",
+        "items",
+        "join",
+        "keys",
+        "lower",
+        "lstrip",
+        "pop",
+        "replace",
+        "rstrip",
+        "sort",
+        "split",
+        "startswith",
+        "strip",
+        "upper",
+        "values",
+    }
+)
+DANGEROUS_STRING_TOKENS = frozenset(
+    {
+        "__",
+        "builtins",
+        "import",
+        "globals",
+        "subclasses",
+        "system",
+        "popen",
+        "open",
+        "read",
+        "write",
+        "socket",
+        "subprocess",
+        "pathlib",
+        "os",
+        "sys",
     }
 )
 DANGEROUS_PYTHON_NAMES = frozenset(
@@ -48,23 +112,31 @@ DANGEROUS_PYTHON_NAMES = frozenset(
         "vars",
     }
 )
-DANGEROUS_IMPORT_ROOTS = frozenset(
+PYTHON_MODULE_NAMES = frozenset(
     {
         "asyncio",
         "builtins",
+        "collections",
         "ctypes",
+        "functools",
         "httpx",
         "importlib",
+        "itertools",
+        "math",
         "multiprocessing",
+        "operator",
         "os",
         "pathlib",
         "pickle",
         "requests",
         "resource",
+        "re",
         "runpy",
         "shutil",
         "signal",
         "socket",
+        "statistics",
+        "string",
         "subprocess",
         "sys",
         "tempfile",
@@ -93,6 +165,198 @@ DANGEROUS_ATTRIBUTE_NAMES = frozenset(
         "eval",
     }
 )
+ALLOWED_AST_NODES = (
+    ast.Module,
+    ast.FunctionDef,
+    ast.arguments,
+    ast.arg,
+    ast.Return,
+    ast.Assign,
+    ast.AnnAssign,
+    ast.AugAssign,
+    ast.Expr,
+    ast.If,
+    ast.For,
+    ast.While,
+    ast.Break,
+    ast.Continue,
+    ast.Pass,
+    ast.Try,
+    ast.ExceptHandler,
+    ast.Raise,
+    ast.Compare,
+    ast.BoolOp,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.IfExp,
+    ast.Call,
+    ast.Name,
+    ast.Attribute,
+    ast.Load,
+    ast.Store,
+    ast.Del,
+    ast.Constant,
+    ast.List,
+    ast.Tuple,
+    ast.Set,
+    ast.Dict,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.comprehension,
+    ast.Subscript,
+    ast.Slice,
+    ast.JoinedStr,
+    ast.FormattedValue,
+    ast.NamedExpr,
+    ast.operator,
+    ast.unaryop,
+    ast.boolop,
+    ast.cmpop,
+)
+PATCH_METADATA_PREFIXES = (
+    "new file mode ",
+    "deleted file mode ",
+    "old mode ",
+    "new mode ",
+    "copy from ",
+    "copy to ",
+    "rename from ",
+    "rename to ",
+)
+QUALITY_TEST_RUNNER = r"""
+from __future__ import annotations
+
+import importlib.util
+import inspect
+import json
+import os
+import sys
+import types
+from pathlib import Path
+
+
+SAFE_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "float": float,
+    "int": int,
+    "isinstance": isinstance,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "range": range,
+    "reversed": reversed,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+    "Exception": Exception,
+    "TypeError": TypeError,
+    "ValueError": ValueError,
+    "ZeroDivisionError": ZeroDivisionError,
+}
+
+
+def load_solution(failures: list[dict[str, str]]) -> bool:
+    path = Path.cwd() / "solution.py"
+    module = types.ModuleType("solution")
+    module.__file__ = str(path)
+    module.__dict__["__builtins__"] = SAFE_BUILTINS
+    try:
+        code = compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        exec(code, module.__dict__)
+    except BaseException as exc:
+        failures.append(
+            {
+                "file": "solution.py",
+                "stage": "load",
+                "error_type": type(exc).__name__,
+            }
+        )
+        return False
+    sys.modules["solution"] = module
+    return True
+
+
+def main() -> int:
+    tests = json.loads(os.environ.get("GEMMA4_MTP_QUALITY_TESTS", "[]"))
+    failures = []
+    executed = 0
+    if not load_solution(failures):
+        payload = {"executed": executed, "failures": failures}
+        print(json.dumps(payload, sort_keys=True))
+        return 1
+    for index, relative in enumerate(tests):
+        path = Path.cwd() / relative
+        spec = importlib.util.spec_from_file_location(f"quality_test_{index}", path)
+        if spec is None or spec.loader is None:
+            failures.append({"file": relative, "error": "import_spec_missing"})
+            continue
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException as exc:
+            failures.append(
+                {
+                    "file": relative,
+                    "stage": "import",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            continue
+        for name, value in sorted(vars(module).items()):
+            if not name.startswith("test_") or not callable(value):
+                continue
+            executed += 1
+            try:
+                signature = inspect.signature(value)
+                required = [
+                    parameter
+                    for parameter in signature.parameters.values()
+                    if parameter.default is inspect.Parameter.empty
+                    and parameter.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+                ]
+                if required:
+                    failures.append(
+                        {
+                            "file": relative,
+                            "test": name,
+                            "error": "fixtures_not_supported",
+                        }
+                    )
+                    continue
+                value()
+            except BaseException as exc:
+                failures.append(
+                    {
+                        "file": relative,
+                        "test": name,
+                        "error_type": type(exc).__name__,
+                    }
+                )
+    payload = {"executed": executed, "failures": failures}
+    print(json.dumps(payload, sort_keys=True))
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
 
 
 @dataclass(frozen=True)
@@ -295,19 +559,15 @@ def validate_patch_apply(
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
-        result = subprocess.run(
+        run = _run_validator_subprocess(
             ["git", "apply", "--check", "-"],
             cwd=root,
             input=patch,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             timeout=5,
-            check=False,
         )
     return {
-        "passed": result.returncode == 0,
-        "diagnostics": _subprocess_diagnostics(result),
+        "passed": run["returncode"] == 0,
+        "diagnostics": run["diagnostics"],
     }
 
 
@@ -385,19 +645,16 @@ def _validate_python_unit(content: str, *, tests: dict[str, str]) -> dict[str, A
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q"],
+        runner = _write_quality_test_runner(root)
+        run = _run_validator_subprocess(
+            [sys.executable, str(runner.name)],
             cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
             timeout=8,
-            check=False,
-            env=_validator_subprocess_env(),
+            env=_validator_subprocess_env(tests=tests),
         )
     return {
-        "passed": result.returncode == 0,
-        "diagnostics": _subprocess_diagnostics(result),
+        "passed": run["returncode"] == 0,
+        "diagnostics": run["diagnostics"],
     }
 
 
@@ -427,21 +684,30 @@ def _validate_repo_patch_tests(
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
-        apply_result = subprocess.run(
+        apply_run = _run_validator_subprocess(
             ["git", "apply", "-"],
             cwd=root,
             input=patch,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             timeout=5,
-            check=False,
         )
-        if apply_result.returncode != 0:
+        if apply_run["returncode"] != 0:
             return {
                 "passed": False,
                 "patch_apply_success": False,
-                "diagnostics": _subprocess_diagnostics(apply_result),
+                "diagnostics": apply_run["diagnostics"],
+            }
+        integrity_diagnostics = _repository_integrity_diagnostics(
+            root,
+            {**files, **tests},
+        )
+        if integrity_diagnostics:
+            return {
+                "passed": False,
+                "patch_apply_success": True,
+                "diagnostics": {
+                    "error": "unsafe_repository_state",
+                    "violations": integrity_diagnostics,
+                },
             }
         safety_diagnostics = _repository_python_safety_diagnostics(root, files)
         if safety_diagnostics:
@@ -453,37 +719,99 @@ def _validate_repo_patch_tests(
                     "violations": safety_diagnostics,
                 },
             }
-        test_result = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q"],
+        test_run = _run_validator_subprocess(
+            [sys.executable, _write_quality_test_runner(root).name],
             cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
             timeout=8,
-            check=False,
-            env=_validator_subprocess_env(),
+            env=_validator_subprocess_env(tests=tests),
         )
     return {
-        "passed": test_result.returncode == 0,
+        "passed": test_run["returncode"] == 0,
         "patch_apply_success": True,
-        "diagnostics": _subprocess_diagnostics(test_result),
+        "diagnostics": test_run["diagnostics"],
     }
+
+
+def _run_validator_subprocess(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    input: str | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            input=input,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "returncode": None,
+            "diagnostics": _timeout_diagnostics(exc, timeout=timeout),
+        }
+    return {
+        "returncode": result.returncode,
+        "diagnostics": _subprocess_diagnostics(result),
+    }
+
+
+def _timeout_diagnostics(
+    exc: subprocess.TimeoutExpired,
+    *,
+    timeout: int,
+) -> dict[str, Any]:
+    stdout = _timeout_output_to_text(exc.stdout)
+    stderr = _timeout_output_to_text(exc.stderr)
+    return {
+        "error": "timeout",
+        "timeout_seconds": timeout,
+        "stdout_sha256": _sha256(stdout),
+        "stderr_sha256": _sha256(stderr),
+        "stdout_bytes": len(stdout.encode("utf-8")),
+        "stderr_bytes": len(stderr.encode("utf-8")),
+    }
+
+
+def _timeout_output_to_text(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _subprocess_diagnostics(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
     return {
         "returncode": result.returncode,
-        "stdout_tail": result.stdout[-1000:],
-        "stderr_tail": result.stderr[-1000:],
+        "stdout_sha256": _sha256(stdout),
+        "stderr_sha256": _sha256(stderr),
+        "stdout_bytes": len(stdout.encode("utf-8")),
+        "stderr_bytes": len(stderr.encode("utf-8")),
     }
 
 
-def _validator_subprocess_env() -> dict[str, str]:
+def _write_quality_test_runner(root: Path) -> Path:
+    runner = root / "_quality_test_runner.py"
+    runner.write_text(QUALITY_TEST_RUNNER, encoding="utf-8")
+    return runner
+
+
+def _validator_subprocess_env(*, tests: dict[str, str]) -> dict[str, str]:
     env = {
+        "GEMMA4_MTP_QUALITY_TESTS": json.dumps(sorted(tests)),
         "PATH": os.environ.get("PATH", ""),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1",
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     }
     return env
 
@@ -526,6 +854,10 @@ def _patch_paths(patch: str) -> dict[str, Any]:
                 if normalized is None:
                     return {"paths": paths, "error": "unsafe_patch_path"}
                 paths.add(normalized)
+        elif line.startswith(PATCH_METADATA_PREFIXES):
+            return {"paths": paths, "error": "unsupported_patch_metadata"}
+        elif line == "GIT binary patch":
+            return {"paths": paths, "error": "unsupported_binary_patch"}
         elif line.startswith("--- ") or line.startswith("+++ "):
             token = line[4:].split("\t", 1)[0].strip()
             normalized = _normalize_patch_path(token)
@@ -548,6 +880,35 @@ def _normalize_patch_path(path: str) -> str | None:
     if normalized == "." or normalized.startswith("../") or normalized == "..":
         return None
     return normalized
+
+
+def _repository_integrity_diagnostics(
+    root: Path,
+    expected_files: dict[str, str],
+) -> list[dict[str, Any]]:
+    diagnostics = []
+    root_resolved = root.resolve()
+    for relative in sorted(expected_files):
+        target = root / relative
+        normalized = _normalize_patch_path(relative)
+        if normalized is None:
+            diagnostics.append({"file": relative, "violations": ["unsafe_path"]})
+            continue
+        if not target.exists():
+            diagnostics.append({"file": relative, "violations": ["file_missing"]})
+            continue
+        violations = []
+        if target.is_symlink():
+            violations.append("symlink_not_allowed")
+        try:
+            target.resolve().relative_to(root_resolved)
+        except ValueError:
+            violations.append("path_escape")
+        if not target.is_file():
+            violations.append("regular_file_required")
+        if violations:
+            diagnostics.append({"file": relative, "violations": violations})
+    return diagnostics
 
 
 def _repository_python_safety_diagnostics(
@@ -575,30 +936,49 @@ def _python_code_safety_diagnostics(code: str) -> list[str]:
         return [f"syntax_error:{exc.msg}"]
 
     violations: set[str] = set()
+    defined_functions = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
     for node in ast.walk(tree):
+        if not isinstance(node, ALLOWED_AST_NODES):
+            violations.add(f"node_not_allowed:{type(node).__name__}")
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = alias.name.split(".", 1)[0]
-                if root not in SAFE_IMPORT_MODULES:
-                    violations.add(f"import_not_allowed:{root}")
+            violations.add("import_not_allowed")
         elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                violations.add("relative_import_not_allowed")
-            root = (node.module or "").split(".", 1)[0]
-            if root not in SAFE_IMPORT_MODULES:
-                violations.add(f"import_not_allowed:{root or '<empty>'}")
+            violations.add("import_not_allowed")
+        elif isinstance(node, ast.FunctionDef):
+            if node.name.startswith("__") or node.name in DANGEROUS_PYTHON_NAMES:
+                violations.add(f"function_name_not_allowed:{node.name}")
         elif isinstance(node, ast.Name):
             if node.id.startswith("__") or node.id in DANGEROUS_PYTHON_NAMES:
                 violations.add(f"name_not_allowed:{node.id}")
-            if node.id in DANGEROUS_IMPORT_ROOTS:
+            if node.id in PYTHON_MODULE_NAMES:
                 violations.add(f"module_name_not_allowed:{node.id}")
         elif isinstance(node, ast.Attribute):
-            if node.attr.startswith("__") or node.attr in DANGEROUS_ATTRIBUTE_NAMES:
+            if (
+                node.attr.startswith("__")
+                or node.attr in DANGEROUS_ATTRIBUTE_NAMES
+                or node.attr not in SAFE_ATTRIBUTE_NAMES
+            ):
                 violations.add(f"attribute_not_allowed:{node.attr}")
         elif isinstance(node, ast.Call):
             call_root = _call_root_name(node.func)
-            if call_root in DANGEROUS_PYTHON_NAMES | DANGEROUS_IMPORT_ROOTS:
+            if call_root in DANGEROUS_PYTHON_NAMES | PYTHON_MODULE_NAMES:
                 violations.add(f"call_not_allowed:{call_root}")
+            if isinstance(node.func, ast.Name) and node.func.id not in (
+                SAFE_BUILTIN_NAMES | SAFE_EXCEPTION_NAMES | defined_functions
+            ):
+                violations.add(f"call_not_allowed:{node.func.id}")
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr not in SAFE_ATTRIBUTE_NAMES
+            ):
+                violations.add(f"call_not_allowed:{node.func.attr}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            normalized = node.value.casefold()
+            for token in DANGEROUS_STRING_TOKENS:
+                if token in normalized:
+                    violations.add(f"string_token_not_allowed:{token}")
     return sorted(violations)
 
 
