@@ -138,7 +138,9 @@ def test_patch_apply_validation_rejects_unexpected_paths_before_git_apply(monkey
 
     assert result["passed"] is False
     assert result["diagnostics"]["error"] == "unexpected_patch_paths"
-    assert result["diagnostics"]["unexpected_paths"] == ["secrets.py"]
+    assert result["diagnostics"]["unexpected_path_count"] == 1
+    assert "unexpected_paths_sha256" in result["diagnostics"]
+    assert "secrets.py" not in str(result["diagnostics"])
 
 
 def test_patch_apply_validation_rejects_git_metadata_before_git_apply(monkeypatch):
@@ -216,8 +218,10 @@ def test_python_unit_validation_rejects_unsafe_code_before_pytest(monkeypatch):
 
     assert result["passed"] is False
     assert result["diagnostics"]["error"] == "unsafe_python_code"
-    assert "import_not_allowed" in result["diagnostics"]["violations"]
-    assert "call_not_allowed:open" in result["diagnostics"]["violations"]
+    summary = result["diagnostics"]["violation_summary"]
+    assert summary["categories"]["import_not_allowed"] == 1
+    assert summary["categories"]["call_not_allowed"] >= 1
+    assert "open" not in str(result["diagnostics"])
 
 
 def test_python_unit_validation_rejects_attrgetter_escape_before_runner(monkeypatch):
@@ -245,8 +249,10 @@ def test_python_unit_validation_rejects_attrgetter_escape_before_runner(monkeypa
 
     assert result["passed"] is False
     assert result["diagnostics"]["error"] == "unsafe_python_code"
-    assert "import_not_allowed" in result["diagnostics"]["violations"]
-    assert "string_token_not_allowed:__" in result["diagnostics"]["violations"]
+    summary = result["diagnostics"]["violation_summary"]
+    assert summary["categories"]["import_not_allowed"] == 1
+    assert summary["categories"]["string_token_not_allowed"] >= 1
+    assert "__globals__" not in str(result["diagnostics"])
 
 
 def test_python_unit_validation_timeout_is_task_failure_without_raw_output(monkeypatch):

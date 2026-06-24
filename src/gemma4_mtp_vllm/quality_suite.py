@@ -635,7 +635,7 @@ def _validate_python_unit(content: str, *, tests: dict[str, str]) -> dict[str, A
             "passed": False,
             "diagnostics": {
                 "error": "unsafe_python_code",
-                "violations": safety_diagnostics,
+                "violation_summary": _violation_summary(safety_diagnostics),
             },
         }
     with tempfile.TemporaryDirectory(prefix="gemma4-mtp-quality-python-") as tmp:
@@ -706,7 +706,7 @@ def _validate_repo_patch_tests(
                 "patch_apply_success": True,
                 "diagnostics": {
                     "error": "unsafe_repository_state",
-                    "violations": integrity_diagnostics,
+                    "violation_summary": _violation_summary(integrity_diagnostics),
                 },
             }
         safety_diagnostics = _repository_python_safety_diagnostics(root, files)
@@ -716,7 +716,7 @@ def _validate_repo_patch_tests(
                 "patch_apply_success": True,
                 "diagnostics": {
                     "error": "unsafe_python_code",
-                    "violations": safety_diagnostics,
+                    "violation_summary": _violation_summary(safety_diagnostics),
                 },
             }
         test_run = _run_validator_subprocess(
@@ -800,6 +800,31 @@ def _subprocess_diagnostics(result: subprocess.CompletedProcess[str]) -> dict[st
     }
 
 
+def _violation_summary(violations: list[Any]) -> dict[str, Any]:
+    serialized = json.dumps(violations, sort_keys=True, separators=(",", ":"))
+    return {
+        "count": len(violations),
+        "sha256": _sha256(serialized),
+        "categories": _violation_categories(violations),
+    }
+
+
+def _violation_categories(violations: list[Any]) -> dict[str, int]:
+    categories: dict[str, int] = {}
+    for violation in violations:
+        if isinstance(violation, str):
+            category = violation.split(":", 1)[0]
+            categories[category] = categories.get(category, 0) + 1
+        elif isinstance(violation, dict):
+            for item in violation.get("violations", []):
+                if isinstance(item, str):
+                    categories[item] = categories.get(item, 0) + 1
+        else:
+            category = type(violation).__name__
+            categories[category] = categories.get(category, 0) + 1
+    return dict(sorted(categories.items()))
+
+
 def _write_quality_test_runner(root: Path) -> Path:
     runner = root / "_quality_test_runner.py"
     runner.write_text(QUALITY_TEST_RUNNER, encoding="utf-8")
@@ -836,8 +861,11 @@ def _patch_path_diagnostics(
     if unexpected:
         return {
             "error": "unexpected_patch_paths",
-            "unexpected_paths": unexpected,
-            "allowed_paths": sorted(normalized_allowed),
+            "unexpected_path_count": len(unexpected),
+            "unexpected_paths_sha256": _sha256(
+                json.dumps(unexpected, separators=(",", ":"))
+            ),
+            "allowed_path_count": len(normalized_allowed),
         }
     return None
 
