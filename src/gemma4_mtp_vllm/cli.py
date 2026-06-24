@@ -1000,6 +1000,7 @@ def doctor(
         Path("logs/vllm-launch-manifest.json"),
         "--runtime-manifest-path",
     ),
+    vllm_log_path: Optional[Path] = typer.Option(None, "--vllm-log-path"),
 ) -> None:
     profile_set = _profile_set()
     selected = resolve_profile(profile, profile_set)
@@ -1011,6 +1012,7 @@ def doctor(
             transport=transport,
             served_model_name=DEFAULT_MODEL_ALIAS,
             runtime_manifest_path=runtime_manifest_path,
+            vllm_log_path=vllm_log_path,
         )
     )
     # Emit single-line JSON so the test seam (splitlines()[-1]) yields a
@@ -1082,6 +1084,7 @@ def serve(
         Path("logs/vllm-launch-manifest.json"),
         "--runtime-manifest-path",
     ),
+    vllm_log_path: Optional[Path] = typer.Option(None, "--vllm-log-path"),
     cors_origin: list[str] = typer.Option([], "--cors-origin"),
 ) -> None:
     if bind_host_requires_api_key(host) and not api_key:
@@ -1104,6 +1107,7 @@ def serve(
         limits=limits,
         vllm_base_url=vllm_base_url,
         runtime_manifest_path=runtime_manifest_path,
+        vllm_log_path=vllm_log_path,
     )
     uvicorn.run(fastapi_app, host=host, port=port)
 

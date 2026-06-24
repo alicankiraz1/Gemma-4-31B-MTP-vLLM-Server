@@ -47,6 +47,7 @@ from gemma4_mtp_vllm.runtime_config import (
     observed_config_from_version,
     public_observed_config,
     redact_public_value,
+    read_text_tail,
 )
 from gemma4_mtp_vllm.server.bind_policy import bind_host_requires_api_key
 from gemma4_mtp_vllm.server.errors import protocol_error_response
@@ -331,6 +332,7 @@ def create_app(
     runtime_manifest: dict[str, Any] | None = None,
     active_backend_pid: int | None = None,
     active_backend_argv: list[str] | None = None,
+    vllm_log_path: Path | None = None,
 ) -> FastAPI:
     if bind_host_requires_api_key(bind_host) and not api_key:
         raise ValueError(f"bind_host {bind_host} requires api_key")
@@ -397,6 +399,7 @@ def create_app(
             runtime_manifest=runtime_manifest,
             active_backend_pid=active_backend_pid,
             active_backend_argv=active_backend_argv,
+            vllm_log_path=vllm_log_path,
         )
         matches = config_matches(desired, observed)
         verification = build_config_verification(desired, observed)
@@ -985,6 +988,7 @@ async def _observed_backend_config(
     runtime_manifest: dict[str, Any] | None = None,
     active_backend_pid: int | None = None,
     active_backend_argv: list[str] | None = None,
+    vllm_log_path: Path | None = None,
 ) -> dict[str, Any]:
     observed = merge_observed_config(
         default_observed_config(),
@@ -1016,12 +1020,17 @@ async def _observed_backend_config(
             observed_config_from_metrics(
                 await _vllm_readiness_probe(vllm.metrics_text()),
                 model_name=served_model_name,
+                log_text=read_text_tail(vllm_log_path),
             ),
         )
     except (asyncio.TimeoutError, VllmHttpError, httpx.HTTPError):
         observed = merge_observed_config(
             observed,
-            observed_config_from_metrics("", model_name=served_model_name),
+            observed_config_from_metrics(
+                "",
+                model_name=served_model_name,
+                log_text=read_text_tail(vllm_log_path),
+            ),
         )
     return observed
 

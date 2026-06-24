@@ -15,6 +15,7 @@ from gemma4_mtp_vllm.runtime_config import (
     observed_config_from_metrics,
     observed_config_from_process_argv,
     redact_argv,
+    read_text_tail,
 )
 
 
@@ -332,6 +333,34 @@ vllm_cuda_graph_capture_duration_seconds_sum 0.75
         "evidence_sources": ["metrics"],
     }
     assert observed["cuda_graph_observed"] is True
+
+
+def test_runtime_observation_uses_cuda_graph_log_text_without_raw_log_output():
+    observed = observed_config_from_metrics(
+        "",
+        model_name="gemma-4-31b-mtp",
+        log_text="INFO Graph capturing finished in 2.5 secs, took 1.0 GiB",
+    )
+
+    assert observed["cuda_graph"]["graph_capture_observed"] is True
+    assert observed["cuda_graph"]["graph_capture_duration_seconds"] == 2.5
+    assert observed["cuda_graph"]["evidence_sources"] == ["logs"]
+    assert observed["cuda_graph_observed"] is True
+    assert observed["_sources"]["cuda_graph"] == "vllm_logs"
+    assert "Graph capturing finished" not in str(observed)
+
+
+def test_read_text_tail_limits_large_vllm_logs(tmp_path):
+    log_path = tmp_path / "vllm.log"
+    log_path.write_text(
+        "ignored-prefix\n" * 20
+        + "INFO Graph capturing finished in 1.0 secs\n",
+        encoding="utf-8",
+    )
+
+    assert read_text_tail(log_path, max_bytes=64).endswith(
+        "INFO Graph capturing finished in 1.0 secs\n"
+    )
 
 
 def test_cuda_graph_not_inferred_from_enforce_eager_false():

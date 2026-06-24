@@ -55,6 +55,7 @@ SECRET_OPTIONS = {
     "--password",
 }
 PRIVATE_PATH_PREFIXES = ("/" "Users" "/", "/" "home" "/")
+LOG_TAIL_BYTES = 256 * 1024
 
 
 def desired_config(
@@ -170,8 +171,8 @@ def observed_config_from_metrics(
         "_sources": {
             "mtp": "vllm_metrics",
             "mtp_observed": "vllm_metrics",
-            "cuda_graph": "vllm_metrics",
-            "cuda_graph_observed": "vllm_metrics",
+            "cuda_graph": _cuda_graph_source(cuda_graph),
+            "cuda_graph_observed": _cuda_graph_source(cuda_graph),
         },
     }
 
@@ -357,6 +358,20 @@ def read_runtime_manifest(path: Path | None) -> dict[str, Any] | None:
     return body if isinstance(body, dict) else None
 
 
+def read_text_tail(path: Path | None, *, max_bytes: int = LOG_TAIL_BYTES) -> str:
+    if path is None or not path.is_file():
+        return ""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes))
+            raw = handle.read(max_bytes)
+    except OSError:
+        return ""
+    return raw.decode("utf-8", errors="replace")
+
+
 def process_argv_for_pid(pid: int) -> list[str] | None:
     cmdline_path = Path("/proc") / str(pid) / "cmdline"
     try:
@@ -451,6 +466,20 @@ def _float_or_none(value: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _cuda_graph_source(cuda_graph: dict[str, Any]) -> str:
+    evidence_sources = cuda_graph.get("evidence_sources")
+    if not isinstance(evidence_sources, list):
+        return "unknown"
+    sources = {source for source in evidence_sources if isinstance(source, str)}
+    if sources == {"metrics", "logs"}:
+        return "vllm_metrics+vllm_logs"
+    if sources == {"metrics"}:
+        return "vllm_metrics"
+    if sources == {"logs"}:
+        return "vllm_logs"
+    return "unknown"
 
 
 def _desired_field_value(desired: dict[str, Any], field: str) -> Any:

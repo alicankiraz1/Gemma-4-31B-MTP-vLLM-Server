@@ -234,6 +234,47 @@ async def test_doctor_reports_cuda_graph_observation_from_metrics():
 
 
 @pytest.mark.asyncio
+async def test_doctor_reports_cuda_graph_observation_from_log_path(tmp_path):
+    log_path = tmp_path / "vllm.log"
+    log_path.write_text(
+        "INFO Graph capturing finished in 3.25 secs, took 1.5 GiB\n",
+        encoding="utf-8",
+    )
+
+    def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text="")
+        return httpx.Response(404)
+
+    report = await build_report(
+        profile=resolve_profile(
+            "tp2_2x32_fp8_gpuonly_cuda_graph",
+            load_profiles(),
+        ),
+        vllm_base_url="http://vllm.local:8000",
+        transport=httpx.MockTransport(handler),
+        served_model_name="gemma-4-31b-mtp",
+        vllm_log_path=log_path,
+    )
+
+    cuda_graph = report["observed_config"]["cuda_graph"]
+    assert cuda_graph["graph_active"] is True
+    assert cuda_graph["graph_capture_observed"] is True
+    assert cuda_graph["graph_capture_duration_seconds"] == 3.25
+    assert cuda_graph["evidence_sources"] == ["logs"]
+    assert report["observed_config"]["cuda_graph_observed"] is True
+
+
+@pytest.mark.asyncio
 async def test_doctor_verifies_runtime_fields_from_active_manifest(tmp_path):
     profile = resolve_profile("tp2_2x32_fp8_gpuonly", load_profiles())
     argv = [

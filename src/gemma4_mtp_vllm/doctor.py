@@ -20,6 +20,7 @@ from gemma4_mtp_vllm.runtime_config import (
     observed_config_from_version,
     public_observed_config,
     redact_public_value,
+    read_text_tail,
 )
 from gemma4_mtp_vllm.versioning import version_at_least
 
@@ -34,6 +35,7 @@ async def build_report(
     runtime_manifest: dict[str, Any] | None = None,
     active_backend_pid: int | None = None,
     active_backend_argv: list[str] | None = None,
+    vllm_log_path: Path | None = None,
 ) -> dict[str, Any]:
     if transport is not None:
         http = httpx.AsyncClient(transport=transport, base_url=vllm_base_url)
@@ -49,6 +51,7 @@ async def build_report(
             runtime_manifest=runtime_manifest,
             active_backend_pid=active_backend_pid,
             active_backend_argv=active_backend_argv,
+            vllm_log_path=vllm_log_path,
         )
     finally:
         await client.aclose()
@@ -63,6 +66,7 @@ async def _build_report(
     runtime_manifest: dict[str, Any] | None = None,
     active_backend_pid: int | None = None,
     active_backend_argv: list[str] | None = None,
+    vllm_log_path: Path | None = None,
 ) -> dict[str, Any]:
     vllm_status: dict[str, Any] = {"status": "unreachable", "version": None}
     target_served = False
@@ -112,12 +116,17 @@ async def _build_report(
                 observed_config_from_metrics(
                     await client.metrics_text(),
                     model_name=served_model_name,
+                    log_text=read_text_tail(vllm_log_path),
                 ),
             )
         except (VllmHttpError, httpx.HTTPError):
             observed = merge_observed_config(
                 observed,
-                observed_config_from_metrics("", model_name=served_model_name),
+                observed_config_from_metrics(
+                    "",
+                    model_name=served_model_name,
+                    log_text=read_text_tail(vllm_log_path),
+                ),
             )
 
     version_ok = version_at_least(

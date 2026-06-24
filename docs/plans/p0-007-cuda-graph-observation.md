@@ -26,9 +26,18 @@ Runtime evidence `cuda_graph` altinda su alanlari raporlar:
 - `graph_active=true` yalnizca capture veya dispatch evidence varsa uretilir.
 - `enforce_eager=false` tek basina `graph_active=true` uretmez.
 - Metrics/log evidence yoksa status `unavailable`, `graph_active=null` kalir.
-- Eager fallback gozlenirse status `fallback_observed`, `graph_active=false`.
+- Eager fallback tek basina gozlenirse status `fallback_observed`,
+  `graph_active=false`.
+- Capture veya dispatch ile birlikte fallback/miss de gozlenirse status
+  `observed_with_fallback`, `graph_active=true`.
+
+## Entegrasyon
+
+`vllm-mtp doctor` ve `vllm-mtp serve` opsiyonel `--vllm-log-path` alir. Bu yol
+verildiginde sadece dosyanin son 256 KiB bolumu okunur, parser'a log evidence
+olarak iletilir ve ham log response icine konmaz.
 
 ## Guvenlik
 
-Parser tolerant ve text-only'dir. Raw startup log saklama bu task'ta eklenmez;
+Parser tolerant ve text-only'dir. Raw startup log response icine konmaz;
 maintenance run kaniti kendi sanitize artifact surecinde saklanmalidir.

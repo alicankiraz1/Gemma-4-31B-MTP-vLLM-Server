@@ -54,6 +54,29 @@ def test_cuda_graph_observation_detects_fallback_without_active():
     assert observation["graph_active"] is False
 
 
+def test_cuda_graph_observation_does_not_mark_skipped_capture_active():
+    logs = "WARNING Skipping CUDA graph capture. CUDAGraph mode is disabled."
+
+    observation = parse_cuda_graph_observation(metrics_text="", log_text=logs)
+
+    assert observation["graph_capture_observed"] is False
+    assert observation["eager_fallback_observed"] is True
+    assert observation["graph_evidence_status"] == "fallback_observed"
+    assert observation["graph_active"] is False
+
+
+def test_cuda_graph_observation_detects_capture_finished_duration_from_logs():
+    logs = "INFO Graph capturing finished in 12.34 secs, took 1.5 GiB"
+
+    observation = parse_cuda_graph_observation(metrics_text="", log_text=logs)
+
+    assert observation["graph_capture_observed"] is True
+    assert observation["graph_capture_duration_seconds"] == 12.34
+    assert observation["graph_evidence_status"] == "observed"
+    assert observation["graph_active"] is True
+    assert observation["evidence_sources"] == ["logs"]
+
+
 def test_cuda_graph_observation_detects_metric_fallback_and_registered_idle():
     fallback = parse_cuda_graph_observation(
         metrics_text="vllm_cuda_graph_fallback_total 2\n",
@@ -68,6 +91,37 @@ def test_cuda_graph_observation_detects_metric_fallback_and_registered_idle():
     assert idle["graph_metrics_registered"] is True
     assert idle["graph_evidence_status"] == "registered_but_idle"
     assert idle["graph_active"] is None
+
+
+def test_cuda_graph_observation_ignores_prometheus_helper_series():
+    observation = parse_cuda_graph_observation(
+        metrics_text=(
+            "vllm_cuda_graph_dispatch_created 1710000000\n"
+            "vllm_cuda_graph_dispatch_bucket{le=\"1\"} 10\n"
+            "vllm_cuda_graph_dispatch_count 10\n"
+            "vllm_cuda_graph_dispatch_total -1\n"
+        ),
+    )
+
+    assert observation["graph_metrics_registered"] is True
+    assert observation["graph_dispatch_observed"] is False
+    assert observation["graph_dispatch_count"] is None
+    assert observation["graph_evidence_status"] == "registered_but_idle"
+    assert observation["graph_active"] is None
+
+
+def test_cuda_graph_observation_keeps_positive_dispatch_with_mixed_fallback():
+    observation = parse_cuda_graph_observation(
+        metrics_text=(
+            "vllm_cuda_graph_dispatch_total 4\n"
+            "vllm_cuda_graph_miss_total 1\n"
+        ),
+    )
+
+    assert observation["graph_dispatch_observed"] is True
+    assert observation["eager_fallback_observed"] is True
+    assert observation["graph_evidence_status"] == "observed_with_fallback"
+    assert observation["graph_active"] is True
 
 
 def test_cuda_graph_observation_ignores_nonfinite_metric_values():

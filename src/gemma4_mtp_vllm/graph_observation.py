@@ -14,12 +14,26 @@ GRAPH_CAPTURE_SIZE_RE = re.compile(
     r"[^0-9]+(?P<sizes>[0-9][0-9,\s\[\]]*)"
 )
 GRAPH_CAPTURE_RE = re.compile(r"(?i)(?:cuda\s*graph|cudagraph).{0,80}captur")
+GRAPH_CAPTURE_FINISHED_RE = re.compile(
+    r"(?i)(?:graph|cuda\s*graph|cudagraph).{0,80}captur(?:e|ing)?\s+finished"
+)
+GRAPH_NEGATIVE_CAPTURE_RE = re.compile(
+    r"(?i)(?:skip(?:ping|ped)?|disable(?:d)?|not enabled|without).{0,80}"
+    r"(?:cuda\s*graph|cudagraph|graph).{0,80}captur"
+)
 GRAPH_DISPATCH_RE = re.compile(
     r"(?i)(?:cuda\s*graph|cudagraph).{0,80}(?:dispatch|replay)"
 )
 GRAPH_FALLBACK_RE = re.compile(
-    r"(?i)(?:cuda\s*graph|cudagraph).{0,120}(?:fallback|falling back|miss)"
+    r"(?i)(?:cuda\s*graph|cudagraph).{0,120}"
+    r"(?:fallback|falling back|miss|skip(?:ping|ped)?|disable(?:d)?|not enabled)"
 )
+GRAPH_DURATION_RE = re.compile(
+    r"(?i)(?:graph|cuda\s*graph|cudagraph).{0,120}"
+    r"(?:finished|captur(?:e|ing)).{0,80}?"
+    r"(?P<duration>[0-9]+(?:\.[0-9]+)?)\s*(?:s|sec|secs|second|seconds)\b"
+)
+PROMETHEUS_HELPER_SUFFIXES = ("_bucket", "_count", "_created")
 
 
 def parse_cuda_graph_observation(
@@ -47,12 +61,14 @@ def parse_cuda_graph_observation(
     if log_summary["has_graph_log"]:
         sources.append("logs")
 
-    if eager_fallback_observed:
+    if graph_capture_observed or graph_dispatch_observed:
+        evidence_status = (
+            "observed_with_fallback" if eager_fallback_observed else "observed"
+        )
+        graph_active = True
+    elif eager_fallback_observed:
         evidence_status = "fallback_observed"
         graph_active: bool | None = False
-    elif graph_capture_observed or graph_dispatch_observed:
-        evidence_status = "observed"
-        graph_active = True
     elif graph_metrics_registered or log_summary["has_graph_log"]:
         evidence_status = "registered_but_idle"
         graph_active = None
@@ -66,7 +82,11 @@ def parse_cuda_graph_observation(
         "graph_dispatch_observed": graph_dispatch_observed,
         "eager_fallback_observed": eager_fallback_observed,
         "graph_dispatch_count": metric_summary["dispatch_count"],
-        "graph_capture_duration_seconds": metric_summary["capture_duration_seconds"],
+        "graph_capture_duration_seconds": (
+            metric_summary["capture_duration_seconds"]
+            if metric_summary["capture_duration_seconds"] is not None
+            else log_summary["capture_duration_seconds"]
+        ),
         "graph_capture_sizes": log_summary["capture_sizes"],
         "graph_evidence_status": evidence_status,
         "graph_active": graph_active,
@@ -96,6 +116,8 @@ def _parse_graph_metrics(metrics_text: str) -> dict[str, Any]:
         if value is None:
             continue
         registered = True
+        if value < 0 or _is_prometheus_helper_metric(name):
+            continue
         if "dispatch" in name or "replay" in name:
             dispatch_count = _sum_optional(dispatch_count, value)
             if value > 0:
@@ -123,21 +145,28 @@ def _parse_graph_metrics(metrics_text: str) -> dict[str, Any]:
 
 
 def _parse_graph_logs(log_text: str) -> dict[str, Any]:
-    capture_observed = bool(GRAPH_CAPTURE_RE.search(log_text))
+    negative_capture = bool(GRAPH_NEGATIVE_CAPTURE_RE.search(log_text))
+    capture_observed = bool(
+        not negative_capture
+        and (GRAPH_CAPTURE_RE.search(log_text) or GRAPH_CAPTURE_FINISHED_RE.search(log_text))
+    )
     dispatch_observed = bool(GRAPH_DISPATCH_RE.search(log_text))
-    fallback_observed = bool(GRAPH_FALLBACK_RE.search(log_text))
+    fallback_observed = bool(negative_capture or GRAPH_FALLBACK_RE.search(log_text))
     capture_sizes = _capture_sizes_from_logs(log_text)
+    capture_duration_seconds = _capture_duration_from_logs(log_text)
     return {
         "has_graph_log": bool(
             capture_observed
             or dispatch_observed
             or fallback_observed
             or capture_sizes
+            or capture_duration_seconds is not None
         ),
         "capture_observed": capture_observed,
         "dispatch_observed": dispatch_observed,
         "fallback_observed": fallback_observed,
         "capture_sizes": capture_sizes,
+        "capture_duration_seconds": capture_duration_seconds,
     }
 
 
@@ -151,6 +180,16 @@ def _capture_sizes_from_logs(log_text: str) -> list[int]:
     return sorted(sizes)
 
 
+def _capture_duration_from_logs(log_text: str) -> float | None:
+    match = GRAPH_DURATION_RE.search(log_text)
+    if not match:
+        return None
+    duration = _float_or_none(match.group("duration"))
+    if duration is None or duration < 0:
+        return None
+    return duration
+
+
 def _float_or_none(value: str) -> float | None:
     try:
         parsed = float(value)
@@ -159,6 +198,10 @@ def _float_or_none(value: str) -> float | None:
     if parsed != parsed or parsed in {float("inf"), float("-inf")}:
         return None
     return parsed
+
+
+def _is_prometheus_helper_metric(name: str) -> bool:
+    return name.endswith(PROMETHEUS_HELPER_SUFFIXES)
 
 
 def _sum_optional(left: float | None, right: float) -> float:

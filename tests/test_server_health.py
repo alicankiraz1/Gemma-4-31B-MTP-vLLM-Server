@@ -181,6 +181,53 @@ def test_health_reports_ready_when_required_runtime_fields_match():
     assert body["mtp"]["state"] == "active"
 
 
+def test_health_reports_cuda_graph_observation_from_log_path(tmp_path):
+    log_path = tmp_path / "vllm.log"
+    log_path.write_text(
+        "INFO Graph capturing finished in 4.5 secs, took 1.0 GiB\n",
+        encoding="utf-8",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/version":
+            return httpx.Response(200, json={"version": "0.21.0"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "gemma-4-31b-mtp", "max_model_len": 2048}]},
+            )
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text="")
+        return httpx.Response(404)
+
+    argv = _fp8_runtime_argv()
+    app = create_app(
+        profile_name="tp2_2x32_fp8_gpuonly_cuda_graph",
+        api_key="secret",
+        vllm_base_url="http://127.0.0.1:8000",
+        vllm_transport=httpx.MockTransport(handler),
+        runtime_manifest={
+            "pid": 123,
+            "argv": argv,
+            "package_versions": {"torch": "2.11.0+cu130", "vllm": "0.21.0"},
+        },
+        active_backend_pid=123,
+        active_backend_argv=argv,
+        vllm_log_path=log_path,
+    )
+    body = TestClient(app).get("/health", headers={"x-api-key": "secret"}).json()
+
+    cuda_graph = body["observed_config"]["cuda_graph"]
+    assert cuda_graph["graph_active"] is True
+    assert cuda_graph["graph_capture_observed"] is True
+    assert cuda_graph["graph_capture_duration_seconds"] == 4.5
+    assert cuda_graph["evidence_sources"] == ["logs"]
+    assert body["observed_config"]["cuda_graph_observed"] is True
+    assert "Graph capturing finished" not in str(body)
+
+
 def test_health_uses_profile_max_output_default_when_limits_not_overridden():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
