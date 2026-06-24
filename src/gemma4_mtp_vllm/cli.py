@@ -2437,7 +2437,10 @@ def _validate_positive_seconds(
 def _finite_number_or_none(value: object) -> float | None:
     if not isinstance(value, (int, float)):
         return None
-    value_float = float(value)
+    try:
+        value_float = float(value)
+    except OverflowError:
+        return None
     return value_float if math.isfinite(value_float) else None
 
 
@@ -2703,9 +2706,9 @@ def _non_inferiority_report(
 
 def _finite_values(values: list[float | None]) -> list[float]:
     return [
-        float(value)
-        for value in values
-        if isinstance(value, (int, float)) and math.isfinite(float(value))
+        finite
+        for finite in (_finite_number_or_none(value) for value in values)
+        if finite is not None
     ]
 
 
@@ -2887,9 +2890,10 @@ def _comparison_ci_low(comparison: dict[str, object]) -> float | None:
     if not isinstance(ci, dict):
         return None
     low = ci.get("low")
-    if not isinstance(low, (int, float)) or not math.isfinite(float(low)):
+    finite_low = _finite_number_or_none(low)
+    if finite_low is None:
         return None
-    return float(low)
+    return finite_low
 
 
 def _group_within_backend_repeatability(group: dict[str, object]) -> dict[str, object]:
@@ -3192,8 +3196,7 @@ def _nested_float(payload: dict[str, object], *keys: str) -> float | None:
         value = value.get(key)
     if not isinstance(value, (int, float)):
         return None
-    value_float = float(value)
-    return value_float if math.isfinite(value_float) else None
+    return _finite_number_or_none(value)
 
 
 def _write_benchmark_artifacts(

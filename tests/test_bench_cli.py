@@ -3069,6 +3069,65 @@ def test_bench_compare_rejects_nonfinite_benchmark_metrics(tmp_path):
     assert "invalid JSON file" in result.stderr
 
 
+def test_bench_compare_rejects_oversized_json_integer_metrics_cleanly(tmp_path):
+    oversized = int("9" * 309)
+    control_json = tmp_path / "control.json"
+    candidate_json = tmp_path / "candidate.json"
+    control_payload = _bench_single_compare_payload(
+        label="eager_true",
+        profile="tp2_2x32_fp8_gpuonly",
+        e2e_values=[100.0, 102.0],
+    )
+    candidate_payload = _bench_single_compare_payload(
+        label="eager_false",
+        profile="tp2_2x32_fp8_gpuonly_cuda_graph",
+        e2e_values=[110.0, 114.0],
+    )
+    for group in candidate_payload["groups"]:
+        for observation in group["observations"]:
+            observation["result"]["e2e_output_tokens_per_second"] = oversized
+            observation["result"]["ttft_ms"] = oversized
+            observation["result"]["tpot_ms"] = oversized
+    control_json.write_text(json.dumps(control_payload), encoding="utf-8")
+    candidate_json.write_text(json.dumps(candidate_payload), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "bench-compare",
+            "--control-json",
+            str(control_json),
+            "--candidate-json",
+            str(candidate_json),
+            "--control-startup-seconds",
+            "55.0",
+            "--candidate-startup-seconds",
+            "52.0",
+            "--control-peak-gpu-memory-mib",
+            "31000",
+            "--control-peak-gpu-memory-mib",
+            "31100",
+            "--candidate-peak-gpu-memory-mib",
+            "31200",
+            "--candidate-peak-gpu-memory-mib",
+            "31300",
+            "--soak-passed",
+            "--soak-seconds",
+            "3600",
+            "--soak-error-count",
+            "0",
+            "--no-oom",
+        ],
+    )
+
+    assert result.exit_code == 0, result.exception
+    payload = json.loads(result.stdout)
+    assert payload["recommendation"]["action"] == "do_not_adopt"
+    assert "meaningful_e2e_speedup_missing" in payload["failure_reasons"]
+    assert "ttft_evidence_missing" in payload["missing_evidence"]
+    assert "tpot_evidence_missing" in payload["missing_evidence"]
+
+
 def test_bench_compare_rejects_nonfinite_pass_through_identity_fields(tmp_path):
     control_json = tmp_path / "control.json"
     candidate_json = tmp_path / "candidate.json"
