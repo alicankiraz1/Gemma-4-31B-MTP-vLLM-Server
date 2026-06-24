@@ -1400,8 +1400,22 @@ def bench_compare(
     soak_seconds: Optional[float] = typer.Option(None, "--soak-seconds"),
     soak_error_count: Optional[int] = typer.Option(None, "--soak-error-count"),
     no_oom: bool = typer.Option(False, "--no-oom"),
-    same_mode_mtp_parity: str = typer.Option("missing", "--same-mode-mtp-parity"),
-    final_answer_quality: str = typer.Option("missing", "--final-answer-quality"),
+    same_mode_mtp_parity: str = typer.Option(
+        "missing",
+        "--same-mode-mtp-parity",
+        help=(
+            "Deprecated manual gate for legacy two-file comparisons; "
+            "use bench-2x2-compare for automatic same-mode parity."
+        ),
+    ),
+    final_answer_quality: str = typer.Option(
+        "missing",
+        "--final-answer-quality",
+        help=(
+            "Deprecated manual gate for legacy two-file comparisons; "
+            "use a deterministic quality lane instead."
+        ),
+    ),
     json_output: Optional[Path] = typer.Option(None, "--json-output"),
 ) -> None:
     """Compare sequential bench-single outputs for an evidence-gated A/B."""
@@ -1503,10 +1517,12 @@ def _compare_2x2_benchmarks(
     role_reports: dict[str, dict[str, object]] = {}
     groups_by_role: dict[str, dict[str, dict[str, object]]] = {}
     repeatability_by_role: dict[str, dict[str, object]] = {}
+    configs_by_role: dict[str, dict[str, object] | None] = {}
 
     for role in ("A", "B", "C", "D"):
         payload = payloads[role]
         config, config_failures = _p0_004_role_configuration(payload, role)
+        configs_by_role[role] = config
         invalid_reasons.extend(config_failures)
         if payload.get("status") != "complete":
             invalid_reasons.append(f"role_{role}_benchmark_incomplete")
@@ -1533,6 +1549,7 @@ def _compare_2x2_benchmarks(
         }
 
     invalid_reasons.extend(_p0_004_group_matrix_failures(groups_by_role))
+    invalid_reasons.extend(_p0_004_configuration_matrix_failures(configs_by_role))
     pair_reports: list[dict[str, object]] = []
     for left_role, right_role, relation, gate_required in P0_004_PAIR_SPECS:
         pair_report = _p0_004_pair_report(
@@ -1596,8 +1613,18 @@ def _p0_004_role_configuration(
 
     failures: list[str] = []
     profile = source.get("profile")
+    argv = source.get("argv")
+    argv_items = (
+        list(argv)
+        if isinstance(argv, list) and all(isinstance(item, str) for item in argv)
+        else None
+    )
     enforce_eager = source.get("enforce_eager")
+    if enforce_eager is None and argv_items is not None:
+        enforce_eager = _argv_has_option(argv_items, "--enforce-eager")
     enable_mtp = source.get("enable_mtp")
+    if enable_mtp is None and argv_items is not None:
+        enable_mtp = _argv_has_option(argv_items, "--speculative-config")
     if profile != expected["profile"]:
         failures.append(f"role_{role}_profile_unexpected")
     if enforce_eager is not expected["enforce_eager"]:
@@ -1610,17 +1637,18 @@ def _p0_004_role_configuration(
         "profile": profile,
         "enforce_eager": enforce_eager,
         "enable_mtp": enable_mtp,
+        "comparison_fields": _p0_004_comparable_configuration_fields(source),
     }
     if argv is not None:
-        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+        if argv_items is None:
             failures.append(f"role_{role}_argv_invalid")
         else:
-            normalized["argv"] = list(argv)
-            if _argv_has_option(argv, "--enforce-eager") is not expected[
+            normalized["argv"] = argv_items
+            if _argv_has_option(argv_items, "--enforce-eager") is not expected[
                 "enforce_eager"
             ]:
                 failures.append(f"role_{role}_argv_enforce_eager_mismatch")
-            if _argv_has_option(argv, "--speculative-config") is not expected[
+            if _argv_has_option(argv_items, "--speculative-config") is not expected[
                 "enable_mtp"
             ]:
                 failures.append(f"role_{role}_argv_speculative_config_mismatch")
@@ -1629,6 +1657,22 @@ def _p0_004_role_configuration(
 
 def _argv_has_option(argv: list[str], option: str) -> bool:
     return any(item == option or item.startswith(f"{option}=") for item in argv)
+
+
+def _p0_004_comparable_configuration_fields(
+    source: dict[str, object],
+) -> dict[str, object]:
+    ignored = {
+        "profile",
+        "enforce_eager",
+        "enable_mtp",
+        "argv",
+        "argv_fingerprint",
+        "timestamp",
+        "pid",
+        "cwd",
+    }
+    return {key: value for key, value in source.items() if key not in ignored}
 
 
 def _p0_004_role_repeatability(
@@ -1682,6 +1726,74 @@ def _p0_004_group_matrix_failures(
     if not all_keys:
         failures.append("group_matrix_missing")
     return failures
+
+
+def _p0_004_configuration_matrix_failures(
+    configs_by_role: dict[str, dict[str, object] | None],
+) -> list[str]:
+    failures: list[str] = []
+    for left_role, right_role, relation, _gate_required in P0_004_PAIR_SPECS:
+        left = configs_by_role.get(left_role)
+        right = configs_by_role.get(right_role)
+        if left is None or right is None:
+            continue
+        left_fields = left.get("comparison_fields")
+        right_fields = right.get("comparison_fields")
+        if isinstance(left_fields, dict) and isinstance(right_fields, dict):
+            if left_fields != right_fields:
+                failures.append(f"configuration_mismatch:{left_role}_vs_{right_role}")
+        left_argv = left.get("argv")
+        right_argv = right.get("argv")
+        if isinstance(left_argv, list) and isinstance(right_argv, list):
+            allowed_flags = (
+                {"--enforce-eager"} if relation == "cross_mode_eager" else set()
+            )
+            allowed_value_options = (
+                {"--port", "--speculative-config"}
+                if relation == "same_mode_mtp"
+                else {"--port"}
+            )
+            if _canonicalize_argv_for_2x2_compare(
+                left_argv,
+                allowed_flags=allowed_flags,
+                allowed_value_options=allowed_value_options,
+            ) != _canonicalize_argv_for_2x2_compare(
+                right_argv,
+                allowed_flags=allowed_flags,
+                allowed_value_options=allowed_value_options,
+            ):
+                failures.append(f"argv_mismatch:{left_role}_vs_{right_role}")
+    return failures
+
+
+def _canonicalize_argv_for_2x2_compare(
+    argv: list[object],
+    *,
+    allowed_flags: set[str],
+    allowed_value_options: set[str],
+) -> list[object]:
+    result: list[object] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if not isinstance(item, str):
+            result.append(item)
+            index += 1
+            continue
+        if item in allowed_flags or any(
+            item.startswith(f"{option}=") for option in allowed_flags
+        ):
+            index += 1
+            continue
+        if item in allowed_value_options:
+            index += 2
+            continue
+        if any(item.startswith(f"{option}=") for option in allowed_value_options):
+            index += 1
+            continue
+        result.append(item)
+        index += 1
+    return result
 
 
 def _p0_004_pair_report(

@@ -1852,6 +1852,59 @@ def test_bench_2x2_compare_rejects_wrong_profile_and_argv(tmp_path):
     assert "role_B_argv_speculative_config_mismatch" in payload["failure_reasons"]
 
 
+def test_bench_2x2_compare_accepts_launch_manifest_inferred_from_argv(tmp_path):
+    payloads = {
+        role.lower(): _bench_2x2_payload(role=role, token_ids=[1, 2, 3])
+        for role in ("A", "B", "C", "D")
+    }
+    for payload in payloads.values():
+        launch_manifest = payload.pop("configuration")
+        launch_manifest.pop("enforce_eager")
+        launch_manifest["timestamp"] = "2026-06-24T00:00:00Z"
+        launch_manifest["pid"] = 12345
+        payload["launch_manifest"] = launch_manifest
+    paths = _write_2x2_inputs(tmp_path, **payloads)
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "passed"
+    assert payload["failure_reasons"] == []
+    assert payload["role_reports"]["C"]["configuration"]["enforce_eager"] is False
+
+
+def test_bench_2x2_compare_rejects_independent_config_difference(tmp_path):
+    payloads = {
+        role.lower(): _bench_2x2_payload(role=role, token_ids=[1, 2, 3])
+        for role in ("A", "B", "C", "D")
+    }
+    for payload in payloads.values():
+        payload["configuration"]["package_versions"] = {"vllm": "0.21.0"}
+    payloads["b"]["configuration"]["package_versions"] = {"vllm": "0.22.0"}
+    paths = _write_2x2_inputs(tmp_path, **payloads)
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "invalid_experiment"
+    assert "configuration_mismatch:A_vs_B" in payload["failure_reasons"]
+
+
+def test_bench_2x2_compare_rejects_independent_argv_difference(tmp_path):
+    d_payload = _bench_2x2_payload(role="D", token_ids=[1, 2, 3])
+    d_payload["configuration"]["argv"].extend(["--max-model-len", "4096"])
+    paths = _write_2x2_inputs(tmp_path, d=d_payload)
+
+    result = _invoke_bench_2x2(paths)
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["experiment_status"] == "invalid_experiment"
+    assert "argv_mismatch:C_vs_D" in payload["failure_reasons"]
+
+
 def test_bench_2x2_compare_rejects_request_body_mismatch(tmp_path):
     mismatched_body = {
         "model": "gemma-4-31b-mtp",
