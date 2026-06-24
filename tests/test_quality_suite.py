@@ -176,6 +176,24 @@ copy to conftest.py
     assert copy_result["diagnostics"]["error"] == "unsupported_patch_metadata"
 
 
+def test_patch_apply_validation_rejects_delete_patch_before_git_apply(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("git apply should not run for file deletion patches")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.quality_suite.subprocess.run", fail_run)
+    patch = """diff --git a/calc.py b/calc.py
+--- a/calc.py
++++ /dev/null
+@@ -1 +0,0 @@
+-VALUE = 1
+"""
+
+    result = validate_patch_apply(patch, files={"calc.py": "VALUE = 1\n"})
+
+    assert result["passed"] is False
+    assert result["diagnostics"]["error"] == "unsupported_file_create_delete"
+
+
 def test_python_unit_validation_accepts_safe_solution():
     task = QualityTask(
         task_id="py_unit_safe",

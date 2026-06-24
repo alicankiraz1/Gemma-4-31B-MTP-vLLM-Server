@@ -888,8 +888,10 @@ def _patch_paths(patch: str) -> dict[str, Any]:
             return {"paths": paths, "error": "unsupported_binary_patch"}
         elif line.startswith("--- ") or line.startswith("+++ "):
             token = line[4:].split("\t", 1)[0].strip()
+            if token == "/dev/null":
+                return {"paths": paths, "error": "unsupported_file_create_delete"}
             normalized = _normalize_patch_path(token)
-            if normalized is None and token != "/dev/null":
+            if normalized is None:
                 return {"paths": paths, "error": "unsafe_patch_path"}
             if normalized:
                 paths.add(normalized)
