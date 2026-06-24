@@ -117,6 +117,11 @@ and runtime manifest match the previous candidate evidence.
 Run `bench-compare` for the B-vs-D performance diagnostic with repaired semantics,
 then include same-mode parity and final-answer quality gate results:
 
+Pass `--same-mode-mtp-parity passed` only after `bench-2x2-compare` reports
+passed same-mode A-vs-B and C-vs-D gates. If those gates are missing or failed,
+the recommendation must remain `insufficient_evidence` or `do_not_adopt`
+according to the comparator failure reason.
+
 ```bash
 .venv/bin/vllm-mtp bench-compare \
   --control-json "$EVIDENCE/matrix/B/eager_mtp.json" \

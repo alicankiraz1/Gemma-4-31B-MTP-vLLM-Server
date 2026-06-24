@@ -329,6 +329,8 @@ def test_p1_001r_runbook_documents_repaired_2x2_gates():
     assert "acceptance-rate margin: `-0.01`" in runbook
     assert "mean-acceptance-length margin: `-0.05`" in runbook
     assert "new 10-minute D sanity soak" in runbook
+    assert "only after `bench-2x2-compare` reports" in runbook
+    assert "passed same-mode A-vs-B and C-vs-D gates" in runbook
     assert "--same-mode-mtp-parity passed" in runbook
     assert "--final-answer-quality passed" in runbook
     assert "doctor, `/health`, OpenAI chat, OpenAI streaming" in runbook
