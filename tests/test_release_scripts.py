@@ -362,6 +362,33 @@ def test_gitignore_covers_env_file_variants():
         assert result.returncode == 0, path
 
 
+def test_gitignore_covers_private_cluster_topologies():
+    for path in (
+        "config/cluster_topologies.local.yaml",
+        "config/cluster_topologies.private.yaml",
+        "nested/cluster_topologies.private.yaml",
+    ):
+        result = subprocess.run(
+            ["git", "check-ignore", "--no-index", "-q", path],
+            check=False,
+        )
+        assert result.returncode == 0, path
+
+
+def test_public_cluster_topology_example_has_no_private_addresses():
+    for path in (
+        Path("config/cluster_topologies.example.yaml"),
+        Path("src/gemma4_mtp_vllm/config/cluster_topologies.example.yaml"),
+    ):
+        body = path.read_text(encoding="utf-8")
+        assert "/Users/" not in body
+        assert "/home/" not in body
+        assert "192.168." not in body
+        assert "10.100." not in body
+        assert "10.0.42." not in body
+        assert "homelander" not in body.lower()
+
+
 def test_verify_source_archive_excludes_forbidden_paths():
     script = Path("scripts/verify_source_archive.sh").read_text(encoding="utf-8")
     for path in (".venv", ".git", "dist", ".pytest_cache", "__pycache__",

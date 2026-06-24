@@ -49,6 +49,110 @@ def test_launch_command_prints_2x32_smoke_args():
     assert "--enforce-eager" in result.stdout
 
 
+def test_cluster_plan_command_prints_shell_safe_dry_run():
+    result = runner.invoke(
+        app,
+        [
+            "cluster-plan",
+            "--topology",
+            "dgx-spark-example",
+            "--node-count",
+            "2",
+            "--runtime-id",
+            "run-123",
+            "--format",
+            "shell",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "# dry_run_only=true" in result.stdout
+    assert "ray start --head" in result.stdout
+    assert "ray start --address=198.51.100.1:6379" in result.stdout
+    assert "vllm serve google/gemma-4-31B-it" in result.stdout
+    assert "--distributed-executor-backend ray" in result.stdout
+    assert "--tensor-parallel-size 2" in result.stdout
+    assert "--reasoning-parser gemma4" in result.stdout
+    assert "--speculative-config" in result.stdout
+    assert "ray stop" not in result.stdout
+    assert "ssh " not in result.stdout
+
+
+def test_cluster_plan_command_prints_deterministic_json(tmp_path):
+    output = tmp_path / "cluster-plan.json"
+    result = runner.invoke(
+        app,
+        [
+            "cluster-plan",
+            "--profile",
+            "tp2_2x32_fp8_gpuonly",
+            "--topology",
+            "dgx-spark-example",
+            "--node-count",
+            "4",
+            "--runtime-id",
+            "roce-run-123",
+            "--transport-profile",
+            "roce-a",
+            "--fabric-cidr",
+            "198.51.100.0/24",
+            "--format",
+            "json",
+            "--json-output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == json.loads(output.read_text(encoding="utf-8"))
+    assert payload["dry_run_only"] is True
+    assert payload["transport_profile"] == "roce-a"
+    assert payload["node_count"] == 4
+    assert payload["tensor_parallel_size"] == 4
+    assert "runtime_bound_nccl_net_ib_logs" in payload["expected_live_gates"]
+    assert all("10.100." not in json.dumps(command) for command in payload["commands"])
+
+
+def test_cluster_plan_rejects_invalid_inputs(tmp_path):
+    missing = tmp_path / "missing.private.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "cluster-plan",
+            "--topology-file",
+            str(missing),
+            "--topology",
+            "private",
+            "--node-count",
+            "2",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "topology file not found" in result.stdout.lower() or "topology file not found" in result.stderr.lower()
+
+    result = runner.invoke(
+        app,
+        ["cluster-plan", "--topology", "dgx-spark-example", "--node-count", "1"],
+    )
+    assert result.exit_code != 0
+    assert "at least 2" in result.stdout.lower() or "at least 2" in result.stderr.lower()
+
+    result = runner.invoke(
+        app,
+        [
+            "cluster-plan",
+            "--topology",
+            "dgx-spark-example",
+            "--node-count",
+            "2",
+            "--transport-profile",
+            "fabric-b",
+        ],
+    )
+    assert result.exit_code != 0
+
+
 def test_launch_rejects_public_raw_vllm_without_explicit_allow():
     result = runner.invoke(app, ["launch", "--host", "0.0.0.0", "--print-only"])
     assert result.exit_code != 0

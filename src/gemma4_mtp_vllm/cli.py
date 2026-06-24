@@ -33,6 +33,13 @@ from gemma4_mtp_vllm.benchmarking import (
     percentile,
     speedup,
 )
+from gemma4_mtp_vllm.cluster import (
+    DEFAULT_FABRIC_CIDR,
+    DEFAULT_FABRIC_IFACE,
+    DEFAULT_TRANSPORT_PROFILE,
+    build_cluster_launch_plan,
+    load_cluster_topologies,
+)
 from gemma4_mtp_vllm.doctor import build_report
 from gemma4_mtp_vllm.launch import (
     build_vllm_serve_args,
@@ -1061,6 +1068,94 @@ def launch(
             served_model_name=DEFAULT_MODEL_ALIAS,
         )
     os.execvp(resolve_vllm_executable(args[0]), args)
+
+
+@app.command("cluster-plan")
+def cluster_plan(
+    profile: str = typer.Option("safe80", "--profile"),
+    topology_file: Optional[Path] = typer.Option(None, "--topology-file"),
+    topology: str = typer.Option("dgx-spark-example", "--topology"),
+    node_count: int = typer.Option(2, "--node-count"),
+    transport_profile: str = typer.Option(
+        DEFAULT_TRANSPORT_PROFILE,
+        "--transport-profile",
+    ),
+    runtime_id: str = typer.Option("cluster-dry-run", "--runtime-id"),
+    head_ip: Optional[str] = typer.Option(None, "--head-ip"),
+    fabric_iface: Optional[str] = typer.Option(DEFAULT_FABRIC_IFACE, "--fabric-iface"),
+    fabric_cidr: str = typer.Option(DEFAULT_FABRIC_CIDR, "--fabric-cidr"),
+    port: int = typer.Option(8000, "--port"),
+    ray_port: int = typer.Option(6379, "--ray-port"),
+    vllm_bin: str = typer.Option("vllm", "--vllm-bin"),
+    venv: Optional[str] = typer.Option(None, "--venv"),
+    model_path: Optional[str] = typer.Option(None, "--model-path"),
+    served_model_name: Optional[str] = typer.Option(DEFAULT_MODEL_ALIAS, "--served-model-name"),
+    max_model_len: Optional[int] = typer.Option(None, "--max-model-len"),
+    gpu_memory_utilization: Optional[float] = typer.Option(
+        None,
+        "--gpu-memory-utilization",
+    ),
+    max_num_seqs: Optional[int] = typer.Option(None, "--max-num-seqs"),
+    max_num_batched_tokens: Optional[int] = typer.Option(
+        None,
+        "--max-num-batched-tokens",
+    ),
+    no_mtp: bool = typer.Option(False, "--no-mtp"),
+    output_format: str = typer.Option("shell", "--format"),
+    json_output: Optional[Path] = typer.Option(None, "--json-output"),
+) -> None:
+    """Print a dry-run-only Ray/vLLM launch plan for a DGX Spark cluster."""
+    if output_format not in {"shell", "json"}:
+        typer.echo("--format must be shell or json", err=True)
+        raise typer.Exit(code=2)
+    try:
+        topologies = load_cluster_topologies(topology_file)
+        selected_topology = topologies[topology]
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except KeyError as exc:
+        typer.echo(f"unknown topology: {topology}", err=True)
+        raise typer.Exit(code=2) from exc
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    try:
+        selected_profile = resolve_profile(profile, _profile_set())
+        plan = build_cluster_launch_plan(
+            profile=selected_profile,
+            topology=selected_topology,
+            node_count=node_count,
+            runtime_id=runtime_id,
+            transport_profile=transport_profile,
+            head_ip=head_ip,
+            fabric_iface=fabric_iface,
+            fabric_cidr=fabric_cidr,
+            port=port,
+            ray_port=ray_port,
+            vllm_bin=vllm_bin,
+            venv=venv,
+            model_path=model_path,
+            served_model_name=served_model_name,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            max_num_seqs=max_num_seqs,
+            max_num_batched_tokens=max_num_batched_tokens,
+            enable_mtp=not no_mtp,
+        )
+    except (KeyError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    payload = json.dumps(plan.to_dict(), indent=2, sort_keys=True)
+    if json_output is not None:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(payload + "\n", encoding="utf-8")
+    if output_format == "json":
+        typer.echo(payload)
+    else:
+        typer.echo(plan.render_shell(), nl=False)
 
 
 @app.command()

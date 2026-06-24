@@ -298,7 +298,51 @@ For raw vLLM exposure, keep `--host 127.0.0.1`. Passing a non-loopback host to
 `vllm-mtp launch` requires `--allow-public-vllm` because raw vLLM has no gateway
 auth, rate limiting, or CORS protection.
 
-### 5. Start the gateway
+### 5. DGX Spark cluster dry-run planning
+
+`vllm-mtp cluster-plan` generates a public-safe dry-run launch plan for 2x and
+larger DGX Spark clusters. It does not start Ray, start vLLM, stop services,
+open SSH sessions, or change any default profile.
+
+The checked-in example topology uses documentation-only addresses. Put real
+cluster inventory in an ignored private topology file such as
+`config/cluster_topologies.private.yaml`:
+
+```bash
+vllm-mtp cluster-plan \
+    --profile tp2_2x32_fp8_gpuonly \
+    --topology-file config/cluster_topologies.private.yaml \
+    --topology dgx-spark-private \
+    --node-count 4 \
+    --runtime-id my-runtime-id \
+    --transport-profile socket \
+    --format shell
+```
+
+For a RoCE-A trial, keep the plan explicit and runtime-bound:
+
+```bash
+vllm-mtp cluster-plan \
+    --profile tp2_2x32_fp8_gpuonly \
+    --topology-file config/cluster_topologies.private.yaml \
+    --topology dgx-spark-private \
+    --node-count 4 \
+    --runtime-id my-roce-runtime-id \
+    --transport-profile roce-a \
+    --fabric-iface fabric0 \
+    --fabric-cidr 198.51.100.0/24 \
+    --json-output artifacts/cluster-runs/my-roce-runtime-id/plan.json \
+    --format json
+```
+
+The JSON plan includes `dry_run_only: true`, command and environment hashes,
+the dry-run fingerprint, and live gate expectations. A RoCE-A benchmark is not
+a production promotion by itself: generation smoke, queue drain,
+runtime-bound NCCL log proof, Ray continuity, soak, rollback evidence, and a
+preserved socket fallback remain required. `/v1/models` liveness alone is not
+RoCE health.
+
+### 6. Start the gateway
 
 ```bash
 vllm-mtp serve \

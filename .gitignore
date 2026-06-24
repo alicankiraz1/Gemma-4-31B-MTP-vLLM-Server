@@ -17,3 +17,5 @@ logs/
 *.env
 *.env*
 *.log
+cluster_topologies.local.yaml
+cluster_topologies.private.yaml

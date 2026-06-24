@@ -1,0 +1,21 @@
+topologies:
+  dgx-spark-example:
+    label: Example 8x DGX Spark topology
+    gpus_per_node: 1
+    nodes:
+      - name: spark-01
+        fabric_ip: 198.51.100.1
+      - name: spark-02
+        fabric_ip: 198.51.100.2
+      - name: spark-03
+        fabric_ip: 198.51.100.3
+      - name: spark-04
+        fabric_ip: 198.51.100.4
+      - name: spark-05
+        fabric_ip: 198.51.100.5
+      - name: spark-06
+        fabric_ip: 198.51.100.6
+      - name: spark-07
+        fabric_ip: 198.51.100.7
+      - name: spark-08
+        fabric_ip: 198.51.100.8
