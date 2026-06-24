@@ -257,7 +257,7 @@ class BenchmarkClientPool:
         except BaseException as close_exc:
             if exc is not None:
                 _raise_benchmark_close_errors(
-                    [exc, *_flatten_benchmark_close_errors(close_exc)]
+                    [exc, *_benchmark_close_error_list(close_exc)]
                 )
             raise
 
@@ -280,20 +280,33 @@ class BenchmarkClientPool:
         _raise_benchmark_close_errors(close_errors)
 
 
-def _flatten_benchmark_close_errors(exc: BaseException) -> list[BaseException]:
-    if isinstance(exc, BaseExceptionGroup):
-        return list(exc.exceptions)
+class BenchmarkClientCloseError(Exception):
+    def __init__(self, errors: list[BaseException]) -> None:
+        self.errors = list(errors)
+        details = "; ".join(
+            f"{type(error).__name__}: {error}" for error in self.errors
+        )
+        super().__init__(f"benchmark client close failed: {details}")
+
+
+def _benchmark_close_error_list(exc: BaseException) -> list[BaseException]:
+    if isinstance(exc, BenchmarkClientCloseError):
+        return exc.errors
     return [exc]
 
 
 def _raise_benchmark_close_errors(errors: list[BaseException]) -> None:
     if not errors:
         return
+    cancellation = next(
+        (error for error in errors if isinstance(error, asyncio.CancelledError)),
+        None,
+    )
+    if cancellation is not None:
+        raise cancellation
     if len(errors) == 1:
         raise errors[0]
-    if any(not isinstance(error, Exception) for error in errors):
-        raise BaseExceptionGroup("benchmark client close failed", errors)
-    raise ExceptionGroup("benchmark client close failed", errors)
+    raise BenchmarkClientCloseError(errors)
 
 
 async def _measure(

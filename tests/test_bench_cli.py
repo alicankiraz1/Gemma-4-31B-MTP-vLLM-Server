@@ -897,6 +897,33 @@ def test_benchmark_client_pool_close_attempts_all_clients_after_close_failure(
     assert second.closed is True
 
 
+def test_benchmark_client_pool_reports_multiple_close_failures_without_exception_group(
+    monkeypatch,
+):
+    first = _CloseProbe(failure=RuntimeError("first close failed"))
+    second = _CloseProbe(failure=ValueError("second close failed"))
+    created = iter([first, second])
+    monkeypatch.setattr(
+        cli_module.BenchmarkHttpClient,
+        "create",
+        staticmethod(lambda _base_url: next(created)),
+    )
+    pool = cli_module.BenchmarkClientPool()
+    pool.client_for("http://first:8000")
+    pool.client_for("http://second:8000")
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(pool.aclose())
+
+    assert type(exc_info.value).__name__ == "BenchmarkClientCloseError"
+    assert [str(error) for error in exc_info.value.errors] == [
+        "first close failed",
+        "second close failed",
+    ]
+    assert first.closed is True
+    assert second.closed is True
+
+
 def test_benchmark_client_pool_close_attempts_all_clients_after_close_cancellation(
     monkeypatch,
 ):
