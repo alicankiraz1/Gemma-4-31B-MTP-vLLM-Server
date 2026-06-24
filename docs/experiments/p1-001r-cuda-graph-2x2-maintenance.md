@@ -6,7 +6,9 @@ This runbook is for the repaired CUDA-graph evidence run. Do not run any command
 
 - Live backend to restore: `127.0.0.1:8012`
 - Live gateway to restore: `127.0.0.1:18082`
-- Source commit: `a8b55d474bf876f61f9b983d8a151d36633e4be8`
+- Source branch: `codex/p0-008-p1-001r-code-gate`
+- Source commit: record `git rev-parse HEAD` after applying the P0-008 gate commit
+- Audited base commit before the report-only gate commit: `01dc54a93cc46d2513b40acd4a268b22d0c1f6bf`
 - Existing evidence to preserve: `<operator-evidence-root>/p1-001-maintenance-20260622T202831Z`
 - Repair evidence root: `<operator-evidence-root>/p1-001r-repair-20260623T005647Z`
 - Live default profile must not change.

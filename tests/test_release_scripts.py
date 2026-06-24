@@ -309,7 +309,9 @@ def test_p1_001r_runbook_documents_repaired_2x2_gates():
         encoding="utf-8"
     )
     assert "operator explicitly approves the maintenance window" in runbook
-    assert "`a8b55d474bf876f61f9b983d8a151d36633e4be8`" in runbook
+    assert "`codex/p0-008-p1-001r-code-gate`" in runbook
+    assert "record `git rev-parse HEAD`" in runbook
+    assert "`01dc54a93cc46d2513b40acd4a268b22d0c1f6bf`" in runbook
     assert "`127.0.0.1:8012`" in runbook
     assert "`127.0.0.1:18082`" in runbook
     assert "Live default profile must not change" in runbook
