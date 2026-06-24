@@ -10,6 +10,44 @@ gateway metrics.
 The current release is an alpha focused on local/private GPU serving. It has
 been validated on a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`.
 
+## Current P1-001R Status
+
+The P1-001R repair stream has corrected the benchmark methodology needed to
+decide whether CUDA-graph hybrid can replace the current eager production
+profile. The repo now includes:
+
+- persistent benchmark transport and streaming token instrumentation
+- automatic A/B/C/D 2x2 comparison for same-mode MTP correctness
+- separated fixed-length throughput and natural-EOS quality lanes
+- independent bootstrap confidence intervals for performance and MTP
+  acceptance gates
+- CUDA graph observation from vLLM metrics and sanitized startup logs
+- pre-maintenance code gate, source archive, wheel, and bundle validation
+- read-only live baseline evidence summary
+- safe-shutdown preflight and rollback handoff for the maintenance window
+
+Current production rollback profile remains:
+
+- Profile: `tp2_2x32_fp8_gpuonly`
+- Mode: eager, `enforce_eager=true`
+- Backend: `127.0.0.1:8012`
+- Gateway: `127.0.0.1:18082`
+
+The CUDA-graph candidate is `tp2_2x32_fp8_gpuonly_cuda_graph`, which preserves
+the same runtime settings except `enforce_eager=false`. It is a candidate only:
+it has not been adopted, it is not the default profile, and it must not be
+presented as production-ready until the P1-001R maintenance run collects A/B/C/D
+evidence, same-mode MTP correctness, natural-EOS quality results, graph
+evidence, candidate soak, and rollback validation.
+
+The next operational step is gated on one explicit maintenance authorization
+covering live gateway stop, live backend stop, A/B/C/D one backend at a time,
+candidate sanity soak, live eager backend restore, gateway restore, and
+post-rollback validation. See
+[`docs/plans/p1-001r-001-live-baseline.md`](docs/plans/p1-001r-001-live-baseline.md)
+and
+[`docs/plans/p1-001r-002-safe-shutdown-preflight.md`](docs/plans/p1-001r-002-safe-shutdown-preflight.md).
+
 ## Performance Snapshot
 
 Benchmark ID: `homelander-fp8-gpuonly-vllm021-tp2-depth4-20260622-p0`
@@ -152,6 +190,11 @@ Use `tp2_2x32_smoke` to reproduce the constrained 2x RTX 5090 smoke backend:
 
 Use `tp2_2x32_fp8_gpuonly` for the all-GPU FP8 experiment on the same host.
 It sets `cpu_offload_gb: 0` and `quantization: fp8`.
+
+Use `tp2_2x32_fp8_gpuonly_cuda_graph` only for isolated validation. It matches
+`tp2_2x32_fp8_gpuonly` except that eager mode is disabled. Do not make it the
+default or live profile until the P1-001R recommendation explicitly supports
+adoption and a separate operator approval changes the default.
 
 ## vLLM Requirement
 
@@ -386,6 +429,33 @@ that upstream regression.
 See https://github.com/vllm-project/vllm/issues/41789 for the active
 discussion.
 
+### P1-001R CUDA Graph Decision Run
+
+The current CUDA-graph decision path uses four sequential single-backend runs:
+
+| ID | Profile | MTP | Eager |
+| --- | --- | --- | --- |
+| A | `tp2_2x32_fp8_gpuonly` | disabled | true |
+| B | `tp2_2x32_fp8_gpuonly` | enabled | true |
+| C | `tp2_2x32_fp8_gpuonly_cuda_graph` | disabled | false |
+| D | `tp2_2x32_fp8_gpuonly_cuda_graph` | enabled | false |
+
+Run `bench-2x2-compare` over the four `bench-single` JSON files to separate
+same-execution-mode MTP correctness gates from cross-mode eager-vs-graph
+diagnostics:
+
+```bash
+vllm-mtp bench-2x2-compare \
+    --a-json "$EVIDENCE/matrix/A/eager_no_mtp.json" \
+    --b-json "$EVIDENCE/matrix/B/eager_mtp.json" \
+    --c-json "$EVIDENCE/matrix/C/graph_no_mtp.json" \
+    --d-json "$EVIDENCE/matrix/D/graph_mtp.json" \
+    --json-output "$EVIDENCE/compare/p1-001r-2x2.json"
+```
+
+Cross-mode B-vs-D token inequality is diagnostic only. It must not be classified
+as an MTP correctness failure unless same-mode A-vs-B or C-vs-D fails.
+
 ## API Examples
 
 ### OpenAI-compatible chat
@@ -544,6 +614,22 @@ release scripts.
 
 243 tests cover the prior release surface plus readiness state-machine behavior,
 MTP per-generation delta evidence, and streaming slot lifecycle regressions.
+
+### P1-001R Code Gate Verification (2026-06-25)
+
+- `.venv/bin/python -m pytest -q` -> `374 passed, 144 warnings`
+- `.venv/bin/python -m compileall -q src tests` -> no errors
+- `.venv/bin/python -m pip check` -> `No broken requirements found.`
+- `git diff --check` -> no errors
+- wheel freshness smoke -> built and installed
+  `gemma4_mtp_vllm-0.2.0a1-py3-none-any.whl`
+- source archive verification -> clean
+- git bundle verification -> clean
+
+374 tests cover the prior release surface plus P0-001 evidence audit, persistent
+benchmark transport, corrected streaming token instrumentation, automatic 2x2
+comparison, throughput and quality lanes, statistical recommendation gates,
+CUDA graph observation, runtime attestation, and release artifact checks.
 
 ## Operational Notes
 
