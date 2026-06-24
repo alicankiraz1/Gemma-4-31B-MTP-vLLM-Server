@@ -1009,7 +1009,7 @@ def test_bench_quality_writes_natural_eos_report_under_mock_transport(
         lambda: httpx.MockTransport(handler),
     )
 
-    out = tmp_path / "quality.json"
+    out = tmp_path / "reports" / "quality.json"
     result = runner.invoke(
         app,
         [

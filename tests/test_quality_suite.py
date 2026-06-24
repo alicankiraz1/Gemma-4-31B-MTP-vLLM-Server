@@ -117,3 +117,66 @@ def test_patch_apply_validation_rejects_non_applicable_patch():
     result = validate_patch_apply(patch, files={"config.py": "TIMEOUT = 30\n"})
 
     assert result["passed"] is False
+
+
+def test_patch_apply_validation_rejects_unexpected_paths_before_git_apply(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("git apply should not run for unexpected paths")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.quality_suite.subprocess.run", fail_run)
+    patch = """diff --git a/secrets.py b/secrets.py
+--- a/secrets.py
++++ b/secrets.py
+@@ -1 +1 @@
+-TOKEN = "old"
++TOKEN = "new"
+"""
+
+    result = validate_patch_apply(patch, files={"config.py": "TIMEOUT = 30\n"})
+
+    assert result["passed"] is False
+    assert result["diagnostics"]["error"] == "unexpected_patch_paths"
+    assert result["diagnostics"]["unexpected_paths"] == ["secrets.py"]
+
+
+def test_python_unit_validation_accepts_safe_solution():
+    task = QualityTask(
+        task_id="py_unit_safe",
+        category="coding_python_unit",
+        validator="python_unit",
+        messages=[],
+        tests={"test_solution.py": "from solution import double\n\ndef test_double():\n    assert double(4) == 8\n"},
+    )
+
+    result = evaluate_quality_task(
+        task,
+        content="def double(value):\n    return value * 2\n",
+        finish_reason="stop",
+    )
+
+    assert result["passed"] is True
+    assert result["executable_static_pass"] is True
+
+
+def test_python_unit_validation_rejects_unsafe_code_before_pytest(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("pytest should not run for unsafe model code")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.quality_suite.subprocess.run", fail_run)
+    task = QualityTask(
+        task_id="py_unit_unsafe",
+        category="coding_python_unit",
+        validator="python_unit",
+        messages=[],
+        tests={"test_solution.py": "from solution import load\n"},
+    )
+
+    result = evaluate_quality_task(
+        task,
+        content="import os\n\ndef load():\n    return open('/etc/passwd').read()\n",
+        finish_reason="stop",
+    )
+
+    assert result["passed"] is False
+    assert result["diagnostics"]["error"] == "unsafe_python_code"
+    assert "import_not_allowed:os" in result["diagnostics"]["violations"]

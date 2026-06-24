@@ -1287,7 +1287,9 @@ def bench_quality(
     )
     rendered = json.dumps(payload, indent=2, allow_nan=False)
     if json_output:
-        Path(json_output).write_text(rendered, encoding="utf-8")
+        output_path = Path(json_output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered, encoding="utf-8")
     typer.echo(rendered)
 
 

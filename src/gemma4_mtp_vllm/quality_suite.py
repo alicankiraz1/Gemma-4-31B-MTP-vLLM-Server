@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 import json
+import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -14,6 +17,82 @@ from typing import Any
 QUALITY_BENCHMARK_LANE = "quality_natural_eos"
 QUALITY_SEED = 1
 QUALITY_MAX_TOKENS = 384
+
+SAFE_IMPORT_MODULES = frozenset(
+    {
+        "collections",
+        "functools",
+        "itertools",
+        "math",
+        "operator",
+        "re",
+        "statistics",
+        "string",
+    }
+)
+DANGEROUS_PYTHON_NAMES = frozenset(
+    {
+        "__builtins__",
+        "__import__",
+        "breakpoint",
+        "compile",
+        "delattr",
+        "eval",
+        "exec",
+        "getattr",
+        "globals",
+        "input",
+        "locals",
+        "open",
+        "setattr",
+        "vars",
+    }
+)
+DANGEROUS_IMPORT_ROOTS = frozenset(
+    {
+        "asyncio",
+        "builtins",
+        "ctypes",
+        "httpx",
+        "importlib",
+        "multiprocessing",
+        "os",
+        "pathlib",
+        "pickle",
+        "requests",
+        "resource",
+        "runpy",
+        "shutil",
+        "signal",
+        "socket",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "threading",
+        "urllib",
+    }
+)
+DANGEROUS_ATTRIBUTE_NAMES = frozenset(
+    {
+        "__class__",
+        "__dict__",
+        "__globals__",
+        "__mro__",
+        "__subclasses__",
+        "read",
+        "read_text",
+        "read_bytes",
+        "write",
+        "write_text",
+        "write_bytes",
+        "system",
+        "popen",
+        "spawn",
+        "fork",
+        "execv",
+        "eval",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -207,6 +286,9 @@ def validate_patch_apply(
     patch = _extract_patch(patch_text)
     if not patch.strip():
         return {"passed": False, "diagnostics": {"error": "patch_missing"}}
+    path_diagnostics = _patch_path_diagnostics(patch, allowed_paths=set(files))
+    if path_diagnostics is not None:
+        return {"passed": False, "diagnostics": path_diagnostics}
     with tempfile.TemporaryDirectory(prefix="gemma4-mtp-quality-patch-") as tmp:
         root = Path(tmp)
         for relative, text in files.items():
@@ -287,6 +369,15 @@ def _validate_task(task: QualityTask, content: str) -> dict[str, Any]:
 
 def _validate_python_unit(content: str, *, tests: dict[str, str]) -> dict[str, Any]:
     code = _extract_code(content, language="python")
+    safety_diagnostics = _python_code_safety_diagnostics(code)
+    if safety_diagnostics:
+        return {
+            "passed": False,
+            "diagnostics": {
+                "error": "unsafe_python_code",
+                "violations": safety_diagnostics,
+            },
+        }
     with tempfile.TemporaryDirectory(prefix="gemma4-mtp-quality-python-") as tmp:
         root = Path(tmp)
         (root / "solution.py").write_text(code, encoding="utf-8")
@@ -302,6 +393,7 @@ def _validate_python_unit(content: str, *, tests: dict[str, str]) -> dict[str, A
             text=True,
             timeout=8,
             check=False,
+            env=_validator_subprocess_env(),
         )
     return {
         "passed": result.returncode == 0,
@@ -321,6 +413,13 @@ def _validate_repo_patch_tests(
             "passed": False,
             "patch_apply_success": False,
             "diagnostics": {"error": "patch_missing"},
+        }
+    path_diagnostics = _patch_path_diagnostics(patch, allowed_paths=set(files))
+    if path_diagnostics is not None:
+        return {
+            "passed": False,
+            "patch_apply_success": False,
+            "diagnostics": path_diagnostics,
         }
     with tempfile.TemporaryDirectory(prefix="gemma4-mtp-quality-repo-") as tmp:
         root = Path(tmp)
@@ -344,6 +443,16 @@ def _validate_repo_patch_tests(
                 "patch_apply_success": False,
                 "diagnostics": _subprocess_diagnostics(apply_result),
             }
+        safety_diagnostics = _repository_python_safety_diagnostics(root, files)
+        if safety_diagnostics:
+            return {
+                "passed": False,
+                "patch_apply_success": True,
+                "diagnostics": {
+                    "error": "unsafe_python_code",
+                    "violations": safety_diagnostics,
+                },
+            }
         test_result = subprocess.run(
             [sys.executable, "-m", "pytest", "-q"],
             cwd=root,
@@ -352,6 +461,7 @@ def _validate_repo_patch_tests(
             text=True,
             timeout=8,
             check=False,
+            env=_validator_subprocess_env(),
         )
     return {
         "passed": test_result.returncode == 0,
@@ -366,6 +476,142 @@ def _subprocess_diagnostics(result: subprocess.CompletedProcess[str]) -> dict[st
         "stdout_tail": result.stdout[-1000:],
         "stderr_tail": result.stderr[-1000:],
     }
+
+
+def _validator_subprocess_env() -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    }
+    return env
+
+
+def _patch_path_diagnostics(
+    patch: str,
+    *,
+    allowed_paths: set[str],
+) -> dict[str, Any] | None:
+    parsed = _patch_paths(patch)
+    if parsed["error"]:
+        return {"error": parsed["error"]}
+    paths = parsed["paths"]
+    if not paths:
+        return {"error": "patch_paths_missing"}
+    normalized_allowed = {
+        normalized
+        for normalized in (_normalize_patch_path(path) for path in allowed_paths)
+        if normalized is not None
+    }
+    unexpected = sorted(paths - normalized_allowed)
+    if unexpected:
+        return {
+            "error": "unexpected_patch_paths",
+            "unexpected_paths": unexpected,
+            "allowed_paths": sorted(normalized_allowed),
+        }
+    return None
+
+
+def _patch_paths(patch: str) -> dict[str, Any]:
+    paths: set[str] = set()
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split()
+            if len(parts) < 4:
+                return {"paths": paths, "error": "malformed_diff_header"}
+            for token in parts[2:4]:
+                normalized = _normalize_patch_path(token)
+                if normalized is None:
+                    return {"paths": paths, "error": "unsafe_patch_path"}
+                paths.add(normalized)
+        elif line.startswith("--- ") or line.startswith("+++ "):
+            token = line[4:].split("\t", 1)[0].strip()
+            normalized = _normalize_patch_path(token)
+            if normalized is None and token != "/dev/null":
+                return {"paths": paths, "error": "unsafe_patch_path"}
+            if normalized:
+                paths.add(normalized)
+    return {"paths": paths, "error": None}
+
+
+def _normalize_patch_path(path: str) -> str | None:
+    if path == "/dev/null":
+        return None
+    path = path.strip().strip('"')
+    if path.startswith("a/") or path.startswith("b/"):
+        path = path[2:]
+    if not path or path.startswith("/") or "\x00" in path:
+        return None
+    normalized = posixpath.normpath(path)
+    if normalized == "." or normalized.startswith("../") or normalized == "..":
+        return None
+    return normalized
+
+
+def _repository_python_safety_diagnostics(
+    root: Path,
+    files: dict[str, str],
+) -> list[dict[str, Any]]:
+    diagnostics = []
+    for relative in sorted(files):
+        if not relative.endswith(".py"):
+            continue
+        path = root / relative
+        if not path.exists():
+            diagnostics.append({"file": relative, "violations": ["file_missing"]})
+            continue
+        violations = _python_code_safety_diagnostics(path.read_text(encoding="utf-8"))
+        if violations:
+            diagnostics.append({"file": relative, "violations": violations})
+    return diagnostics
+
+
+def _python_code_safety_diagnostics(code: str) -> list[str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return [f"syntax_error:{exc.msg}"]
+
+    violations: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if root not in SAFE_IMPORT_MODULES:
+                    violations.add(f"import_not_allowed:{root}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                violations.add("relative_import_not_allowed")
+            root = (node.module or "").split(".", 1)[0]
+            if root not in SAFE_IMPORT_MODULES:
+                violations.add(f"import_not_allowed:{root or '<empty>'}")
+        elif isinstance(node, ast.Name):
+            if node.id.startswith("__") or node.id in DANGEROUS_PYTHON_NAMES:
+                violations.add(f"name_not_allowed:{node.id}")
+            if node.id in DANGEROUS_IMPORT_ROOTS:
+                violations.add(f"module_name_not_allowed:{node.id}")
+        elif isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") or node.attr in DANGEROUS_ATTRIBUTE_NAMES:
+                violations.add(f"attribute_not_allowed:{node.attr}")
+        elif isinstance(node, ast.Call):
+            call_root = _call_root_name(node.func)
+            if call_root in DANGEROUS_PYTHON_NAMES | DANGEROUS_IMPORT_ROOTS:
+                violations.add(f"call_not_allowed:{call_root}")
+    return sorted(violations)
+
+
+def _call_root_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        value = node.value
+        while isinstance(value, ast.Attribute):
+            value = value.value
+        if isinstance(value, ast.Name):
+            return value.id
+    return None
 
 
 def _parse_json_answer(content: str) -> Any | None:
