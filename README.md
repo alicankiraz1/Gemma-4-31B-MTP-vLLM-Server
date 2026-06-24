@@ -393,8 +393,23 @@ vllm-mtp cluster-plan \
     --topology dgx-spark-private \
     --node-count 4 \
     --runtime-id my-runtime-id \
+    --json-output artifacts/cluster-runs/my-runtime-id/plan.json \
     --transport-profile socket \
     --format shell
+```
+
+Socket plan örneği örnek bir shell çıktısı üretir.
+
+```bash
+vllm-mtp cluster-plan \
+    --profile tp2_2x32_fp8_gpuonly \
+    --topology-file config/cluster_topologies.private.yaml \
+    --topology dgx-spark-private \
+    --node-count 4 \
+    --runtime-id my-runtime-id \
+    --transport-profile socket \
+    --format json \
+    --json-output artifacts/cluster-runs/my-runtime-id/plan.json
 ```
 
 For a RoCE-A trial, keep the plan explicit and runtime-bound:
@@ -413,8 +428,32 @@ vllm-mtp cluster-plan \
     --format json
 ```
 
-`--format json` includes `dry_run_only: true`, command and environment hashes,
-the dry-run fingerprint, and live gate expectations.
+`--format json` outputs the contract fields listed in the section above and includes
+`dry_run_only: true`, command/environment SHA-256 values, the dry-run
+fingerprint, and expected live gates.
+
+Example JSON shape:
+
+```json
+{
+  "schema_version": "1.0",
+  "dry_run_only": true,
+  "runtime_id": "my-runtime-id",
+  "profile": "tp2_2x32_fp8_gpuonly",
+  "topology": "dgx-spark-private",
+  "node_count": 4,
+  "transport_profile": "socket",
+  "commands": [
+    {"type": "ray-head", "host": "host-1", "shell": "..."},
+    {"type": "ray-worker", "host": "host-2", "shell": "..."},
+    {"type": "vllm-serve", "host": "host-1", "shell": "..."}
+  ],
+  "resolved_environment_sha256": "...",
+  "resolved_command_sha256": "...",
+  "dry_run_fingerprint": "...",
+  "expected_live_gates": ["generation_smoke", "queue_drain", "ray_continuity"]
+}
+```
 
 For RoCE-A, the same gating still applies: generation smoke, queue drain,
 runtime-bound NCCL log proof, Ray continuity, soak, rollback evidence, and a
