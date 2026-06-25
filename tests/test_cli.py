@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import httpx
 from typer.testing import CliRunner
 
-from gemma4_mtp_vllm.cli import app
+from gemma4_mtp_vllm.cli import app, _parse_queue_metrics
 
 
 runner = CliRunner()
@@ -151,6 +152,217 @@ def test_cluster_plan_rejects_invalid_inputs(tmp_path):
         ],
     )
     assert result.exit_code != 0
+
+
+def _private_topology(path: Path) -> Path:
+    path.write_text(
+        """
+topologies:
+  private:
+    label: Private DGX Spark topology
+    gpus_per_node: 1
+    nodes:
+      - name: spark-01
+        fabric_ip: 198.51.100.1
+      - name: spark-02
+        fabric_ip: 198.51.100.2
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_cluster_serve_requires_live_confirmation(tmp_path):
+    topology_file = _private_topology(tmp_path / "cluster_topologies.private.yaml")
+    result = runner.invoke(
+        app,
+        [
+            "cluster-serve",
+            "--topology-file",
+            str(topology_file),
+            "--topology",
+            "private",
+            "--node-count",
+            "2",
+            "--runtime-id",
+            "run-live-123",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--confirm-live" in result.stdout or "--confirm-live" in result.stderr
+
+
+def test_cluster_serve_executes_mtp_ready_plan_with_confirm(monkeypatch, tmp_path):
+    topology_file = _private_topology(tmp_path / "cluster_topologies.private.yaml")
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        stdout = "4321\n" if "nohup" in argv[-1] else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.cli.subprocess.run", fake_run)
+    result = runner.invoke(
+        app,
+        [
+            "cluster-serve",
+            "--profile",
+            "tp2_2x32_fp8_gpuonly",
+            "--topology-file",
+            str(topology_file),
+            "--topology",
+            "private",
+            "--node-count",
+            "2",
+            "--runtime-id",
+            "run-live-123",
+            "--confirm-live",
+            "--no-preflight",
+            "--no-wait-ready",
+            "--no-queue-drain",
+            "--no-ray-continuity",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["live_execution"] is True
+    assert payload["plan"]["dry_run_only"] is True
+    assert payload["node_count"] == 2
+    assert payload["tensor_parallel_size"] == 2
+    assert payload["preflight"]["status"] == "skipped"
+    assert payload["ready"]["status"] == "skipped"
+    assert payload["queue_drain"]["status"] == "skipped"
+    assert payload["ray_continuity"]["status"] == "skipped"
+    assert len(calls) == 3
+    assert "ray start --head" in calls[0][-1]
+    assert "ray start --address=198.51.100.1:6379" in calls[1][-1]
+    assert "nohup setsid bash -lc" in calls[2][-1]
+    assert "--speculative-config" in calls[2][-1]
+    assert "ray stop" not in json.dumps(payload)
+
+
+def test_cluster_serve_default_preflight_uses_safe_ssh_options(monkeypatch, tmp_path):
+    topology_file = _private_topology(tmp_path / "cluster_topologies.private.yaml")
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        stdout = "4321\n" if "nohup" in argv[-1] else "ok\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("gemma4_mtp_vllm.cli.subprocess.run", fake_run)
+    result = runner.invoke(
+        app,
+        [
+            "cluster-serve",
+            "--topology-file",
+            str(topology_file),
+            "--topology",
+            "private",
+            "--node-count",
+            "2",
+            "--runtime-id",
+            "run-live-123",
+            "--confirm-live",
+            "--no-wait-ready",
+            "--no-queue-drain",
+            "--no-ray-continuity",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["preflight"]["status"] == "pass"
+    assert payload["preflight"]["passed_hosts"] == 2
+    assert len(calls) == 5
+    assert calls[0][:8] == [
+        "ssh",
+        "-n",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=8",
+        "-o",
+        "ConnectionAttempts=1",
+    ]
+    assert "command -v vllm" in calls[0][-1]
+
+
+def test_cluster_serve_rejects_unsupported_live_node_count(tmp_path):
+    topology_file = _private_topology(tmp_path / "cluster_topologies.private.yaml")
+    result = runner.invoke(
+        app,
+        [
+            "cluster-serve",
+            "--topology-file",
+            str(topology_file),
+            "--topology",
+            "private",
+            "--node-count",
+            "3",
+            "--runtime-id",
+            "run-live-123",
+            "--confirm-live",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "2, 4, 6, 8" in result.stdout or "2, 4, 6, 8" in result.stderr
+
+
+def test_cluster_serve_reports_ssh_timeout_as_evidence(monkeypatch, tmp_path):
+    topology_file = _private_topology(tmp_path / "cluster_topologies.private.yaml")
+
+    def fake_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("gemma4_mtp_vllm.cli.subprocess.run", fake_run)
+    result = runner.invoke(
+        app,
+        [
+            "cluster-serve",
+            "--topology-file",
+            str(topology_file),
+            "--topology",
+            "private",
+            "--node-count",
+            "2",
+            "--runtime-id",
+            "run-live-123",
+            "--confirm-live",
+            "--no-preflight",
+            "--no-wait-ready",
+            "--no-queue-drain",
+            "--no-ray-continuity",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["execution"][0]["returncode"] == 124
+    assert "timed out" in payload["execution"][0]["stderr"]
+    assert payload["rollback"]["status"] == "skipped"
+
+
+def test_cluster_queue_metric_parser_accepts_vllm_prometheus_names():
+    parsed = _parse_queue_metrics(
+        """
+# HELP vllm:num_requests_running running requests
+vllm:num_requests_running{model_name="gemma"} 0
+vllm:num_requests_waiting{model_name="gemma"} 0
+other_metric 7
+"""
+    )
+
+    assert parsed == {"metrics_found": True, "running": 0, "waiting": 0}
 
 
 def test_launch_rejects_public_raw_vllm_without_explicit_allow():

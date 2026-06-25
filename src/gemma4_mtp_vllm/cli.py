@@ -36,9 +36,13 @@ from gemma4_mtp_vllm.benchmarking import (
 from gemma4_mtp_vllm.cluster import (
     DEFAULT_FABRIC_CIDR,
     DEFAULT_FABRIC_IFACE,
+    DEFAULT_CLUSTER_SSH_OPTIONS,
     DEFAULT_TRANSPORT_PROFILE,
+    build_cluster_execution_commands,
     build_cluster_launch_plan,
+    build_cluster_rollback_commands,
     load_cluster_topologies,
+    SUPPORTED_LIVE_NODE_COUNTS,
 )
 from gemma4_mtp_vllm.doctor import build_report
 from gemma4_mtp_vllm.launch import (
@@ -1156,6 +1160,824 @@ def cluster_plan(
         typer.echo(payload)
     else:
         typer.echo(plan.render_shell(), nl=False)
+
+
+@app.command("cluster-serve")
+def cluster_serve(
+    profile: str = typer.Option("tp2_2x32_fp8_gpuonly", "--profile"),
+    topology_file: Optional[Path] = typer.Option(None, "--topology-file"),
+    topology: str = typer.Option(..., "--topology"),
+    node_count: int = typer.Option(..., "--node-count"),
+    transport_profile: str = typer.Option(
+        DEFAULT_TRANSPORT_PROFILE,
+        "--transport-profile",
+    ),
+    runtime_id: str = typer.Option(..., "--runtime-id"),
+    head_ip: Optional[str] = typer.Option(None, "--head-ip"),
+    fabric_iface: Optional[str] = typer.Option(DEFAULT_FABRIC_IFACE, "--fabric-iface"),
+    fabric_cidr: str = typer.Option(DEFAULT_FABRIC_CIDR, "--fabric-cidr"),
+    port: int = typer.Option(8000, "--port"),
+    ray_port: int = typer.Option(6379, "--ray-port"),
+    vllm_bin: str = typer.Option("vllm", "--vllm-bin"),
+    venv: Optional[str] = typer.Option(None, "--venv"),
+    model_path: Optional[str] = typer.Option(None, "--model-path"),
+    served_model_name: Optional[str] = typer.Option(DEFAULT_MODEL_ALIAS, "--served-model-name"),
+    max_model_len: Optional[int] = typer.Option(None, "--max-model-len"),
+    gpu_memory_utilization: Optional[float] = typer.Option(
+        None,
+        "--gpu-memory-utilization",
+    ),
+    max_num_seqs: Optional[int] = typer.Option(None, "--max-num-seqs"),
+    max_num_batched_tokens: Optional[int] = typer.Option(
+        None,
+        "--max-num-batched-tokens",
+    ),
+    no_mtp: bool = typer.Option(False, "--no-mtp"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+    ssh_bin: str = typer.Option("ssh", "--ssh-bin"),
+    ssh_option: list[str] = typer.Option([], "--ssh-option"),
+    ssh_host_field: str = typer.Option("name", "--ssh-host-field"),
+    run_root: str = typer.Option("artifacts/cluster-runs", "--run-root"),
+    command_timeout_seconds: float = typer.Option(120.0, "--command-timeout-seconds"),
+    confirm_live: bool = typer.Option(False, "--confirm-live"),
+    preflight: bool = typer.Option(True, "--preflight/--no-preflight"),
+    wait_ready: bool = typer.Option(True, "--wait-ready/--no-wait-ready"),
+    ready_timeout_seconds: float = typer.Option(900.0, "--ready-timeout-seconds"),
+    ready_poll_seconds: float = typer.Option(5.0, "--ready-poll-seconds"),
+    generation_smoke: bool = typer.Option(
+        True,
+        "--generation-smoke/--no-generation-smoke",
+    ),
+    smoke_prompt: str = typer.Option("Reply with exactly: pong", "--smoke-prompt"),
+    smoke_expected: str = typer.Option("pong", "--smoke-expected"),
+    queue_drain: bool = typer.Option(True, "--queue-drain/--no-queue-drain"),
+    queue_timeout_seconds: float = typer.Option(60.0, "--queue-timeout-seconds"),
+    ray_continuity: bool = typer.Option(
+        True,
+        "--ray-continuity/--no-ray-continuity",
+    ),
+    rollback_on_failure: bool = typer.Option(False, "--rollback-on-failure"),
+    output_format: str = typer.Option("text", "--format"),
+    json_output: Optional[Path] = typer.Option(None, "--json-output"),
+) -> None:
+    """Start a live Ray/vLLM DGX Spark serve flow over SSH."""
+    if not confirm_live:
+        typer.echo(
+            "cluster-serve starts Ray and vLLM on remote nodes; pass --confirm-live",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if topology_file is None:
+        typer.echo("cluster-serve requires --topology-file with private inventory", err=True)
+        raise typer.Exit(code=2)
+    if output_format not in {"text", "json"}:
+        typer.echo("--format must be text or json", err=True)
+        raise typer.Exit(code=2)
+    if node_count not in SUPPORTED_LIVE_NODE_COUNTS:
+        supported = ", ".join(str(item) for item in sorted(SUPPORTED_LIVE_NODE_COUNTS))
+        typer.echo(f"cluster-serve supports --node-count {supported}", err=True)
+        raise typer.Exit(code=2)
+    if wait_ready and ready_timeout_seconds <= 0:
+        typer.echo("--ready-timeout-seconds must be positive", err=True)
+        raise typer.Exit(code=2)
+    if ready_poll_seconds <= 0:
+        typer.echo("--ready-poll-seconds must be positive", err=True)
+        raise typer.Exit(code=2)
+    if queue_timeout_seconds <= 0:
+        typer.echo("--queue-timeout-seconds must be positive", err=True)
+        raise typer.Exit(code=2)
+    if command_timeout_seconds <= 0:
+        typer.echo("--command-timeout-seconds must be positive", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        topologies = load_cluster_topologies(topology_file)
+        selected_topology = topologies[topology]
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except KeyError as exc:
+        typer.echo(f"unknown topology: {topology}", err=True)
+        raise typer.Exit(code=2) from exc
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    try:
+        selected_profile = resolve_profile(profile, _profile_set())
+        resolved_ssh_options = tuple(ssh_option) or DEFAULT_CLUSTER_SSH_OPTIONS
+        plan = build_cluster_launch_plan(
+            profile=selected_profile,
+            topology=selected_topology,
+            node_count=node_count,
+            runtime_id=runtime_id,
+            transport_profile=transport_profile,
+            head_ip=head_ip,
+            fabric_iface=fabric_iface,
+            fabric_cidr=fabric_cidr,
+            port=port,
+            ray_port=ray_port,
+            vllm_bin=vllm_bin,
+            venv=venv,
+            model_path=model_path,
+            served_model_name=served_model_name,
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            max_num_seqs=max_num_seqs,
+            max_num_batched_tokens=max_num_batched_tokens,
+            enable_mtp=not no_mtp,
+        )
+        execution_commands = build_cluster_execution_commands(
+            plan,
+            ssh_bin=ssh_bin,
+            ssh_user=ssh_user,
+            ssh_options=resolved_ssh_options,
+            ssh_host_field=ssh_host_field,
+            run_root=run_root,
+        )
+    except (KeyError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    preflight_result = {"status": "skipped"}
+    if preflight:
+        preflight_result = _run_cluster_preflight(
+            execution_commands=execution_commands,
+            ssh_bin=ssh_bin,
+            ssh_options=resolved_ssh_options,
+            venv=venv,
+            vllm_bin=vllm_bin,
+            fabric_iface=fabric_iface,
+            timeout_seconds=command_timeout_seconds,
+        )
+        if preflight_result["status"] != "pass":
+            payload = _cluster_serve_payload(
+                plan=plan,
+                execution_commands=execution_commands,
+                steps=[],
+                ready={"status": "not_checked"},
+                preflight=preflight_result,
+                queue={"status": "not_checked"},
+                ray_continuity={"status": "not_checked"},
+                rollback={"status": "skipped", "reason": "preflight_failed"},
+            )
+            _write_json_output(json_output, payload)
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True), err=True)
+            raise typer.Exit(code=1)
+
+    steps: list[dict[str, Any]] = []
+    for command in execution_commands:
+        result = _run_cluster_subprocess(
+            list(command.argv),
+            timeout_seconds=command_timeout_seconds,
+        )
+        step = {
+            **command.to_dict(),
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+        steps.append(step)
+        if result.returncode != 0:
+            rollback = _run_cluster_rollback(
+                plan=plan,
+                ssh_bin=ssh_bin,
+                ssh_user=ssh_user,
+                ssh_options=resolved_ssh_options,
+                ssh_host_field=ssh_host_field,
+                timeout_seconds=command_timeout_seconds,
+                enabled=rollback_on_failure,
+                reason=f"{command.role} failed on {command.target}",
+            )
+            payload = _cluster_serve_payload(
+                plan=plan,
+                execution_commands=execution_commands,
+                steps=steps,
+                ready={"status": "not_checked"},
+                preflight=preflight_result,
+                queue={"status": "not_checked"},
+                ray_continuity={"status": "not_checked"},
+                rollback=rollback,
+            )
+            _write_json_output(json_output, payload)
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True), err=True)
+            raise typer.Exit(code=1)
+
+    ready = {"status": "skipped"}
+    ready_url = f"http://{head_ip or plan.topology['nodes'][0]['fabric_ip']}:{port}"
+    if wait_ready:
+        ready = _wait_for_cluster_vllm_ready(
+            base_url=ready_url,
+            served_model_name=served_model_name or DEFAULT_MODEL_ALIAS,
+            timeout_seconds=ready_timeout_seconds,
+            poll_seconds=ready_poll_seconds,
+            generation_smoke=generation_smoke,
+            smoke_prompt=smoke_prompt,
+            smoke_expected=smoke_expected,
+        )
+        if ready.get("status") != "ready":
+            rollback = _run_cluster_rollback(
+                plan=plan,
+                ssh_bin=ssh_bin,
+                ssh_user=ssh_user,
+                ssh_options=resolved_ssh_options,
+                ssh_host_field=ssh_host_field,
+                timeout_seconds=command_timeout_seconds,
+                enabled=rollback_on_failure,
+                reason=f"readiness gate failed: {ready.get('status')}",
+            )
+            payload = _cluster_serve_payload(
+                plan=plan,
+                execution_commands=execution_commands,
+                steps=steps,
+                ready=ready,
+                preflight=preflight_result,
+                queue={"status": "not_checked"},
+                ray_continuity={"status": "not_checked"},
+                rollback=rollback,
+            )
+            _write_json_output(json_output, payload)
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True), err=True)
+            raise typer.Exit(code=1)
+
+    queue_result = {"status": "skipped"}
+    if queue_drain:
+        queue_result = _wait_for_cluster_queue_drain(
+            base_url=ready_url,
+            timeout_seconds=queue_timeout_seconds,
+            poll_seconds=ready_poll_seconds,
+        )
+        if queue_result.get("status") != "drained":
+            rollback = _run_cluster_rollback(
+                plan=plan,
+                ssh_bin=ssh_bin,
+                ssh_user=ssh_user,
+                ssh_options=resolved_ssh_options,
+                ssh_host_field=ssh_host_field,
+                timeout_seconds=command_timeout_seconds,
+                enabled=rollback_on_failure,
+                reason=f"queue drain gate failed: {queue_result.get('status')}",
+            )
+            payload = _cluster_serve_payload(
+                plan=plan,
+                execution_commands=execution_commands,
+                steps=steps,
+                ready=ready,
+                preflight=preflight_result,
+                queue=queue_result,
+                ray_continuity={"status": "not_checked"},
+                rollback=rollback,
+            )
+            _write_json_output(json_output, payload)
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True), err=True)
+            raise typer.Exit(code=1)
+
+    ray_result = {"status": "skipped"}
+    if ray_continuity:
+        ray_result = _collect_cluster_ray_continuity(
+            plan=plan,
+            execution_commands=execution_commands,
+            ssh_bin=ssh_bin,
+            ssh_options=resolved_ssh_options,
+            venv=venv,
+            head_ip=head_ip or str(plan.topology["nodes"][0]["fabric_ip"]),
+            ray_port=ray_port,
+            timeout_seconds=command_timeout_seconds,
+        )
+        if ray_result.get("status") != "pass":
+            rollback = _run_cluster_rollback(
+                plan=plan,
+                ssh_bin=ssh_bin,
+                ssh_user=ssh_user,
+                ssh_options=resolved_ssh_options,
+                ssh_host_field=ssh_host_field,
+                timeout_seconds=command_timeout_seconds,
+                enabled=rollback_on_failure,
+                reason=f"ray continuity gate failed: {ray_result.get('status')}",
+            )
+            payload = _cluster_serve_payload(
+                plan=plan,
+                execution_commands=execution_commands,
+                steps=steps,
+                ready=ready,
+                preflight=preflight_result,
+                queue=queue_result,
+                ray_continuity=ray_result,
+                rollback=rollback,
+            )
+            _write_json_output(json_output, payload)
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True), err=True)
+            raise typer.Exit(code=1)
+
+    payload = _cluster_serve_payload(
+        plan=plan,
+        execution_commands=execution_commands,
+        steps=steps,
+        ready=ready,
+        preflight=preflight_result,
+        queue=queue_result,
+        ray_continuity=ray_result,
+        rollback={"status": "skipped", "reason": "not_needed"},
+    )
+    _write_json_output(json_output, payload)
+    if output_format == "json":
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            (
+                f"cluster_serve_started runtime_id={plan.runtime_id} "
+                f"node_count={plan.node_count} tensor_parallel_size={plan.tensor_parallel_size} "
+                f"mtp_enabled={not no_mtp} ready_status={ready['status']} "
+                f"queue_status={queue_result['status']} ray_status={ray_result['status']} "
+                f"dry_run_fingerprint={plan.dry_run_fingerprint}"
+            )
+        )
+
+
+def _cluster_serve_payload(
+    *,
+    plan: Any,
+    execution_commands: tuple[Any, ...],
+    steps: list[dict[str, Any]],
+    ready: dict[str, Any],
+    preflight: dict[str, Any],
+    queue: dict[str, Any],
+    ray_continuity: dict[str, Any],
+    rollback: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "live_execution": True,
+        "runtime_id": plan.runtime_id,
+        "profile": plan.profile,
+        "node_count": plan.node_count,
+        "tensor_parallel_size": plan.tensor_parallel_size,
+        "transport_profile": plan.transport_profile,
+        "dry_run_fingerprint": plan.dry_run_fingerprint,
+        "plan": plan.to_dict(),
+        "execution_commands": [command.to_dict() for command in execution_commands],
+        "preflight": preflight,
+        "execution": steps,
+        "ready": ready,
+        "queue_drain": queue,
+        "ray_continuity": ray_continuity,
+        "rollback": rollback,
+    }
+
+
+def _run_cluster_preflight(
+    *,
+    execution_commands: tuple[Any, ...],
+    ssh_bin: str,
+    ssh_options: tuple[str, ...],
+    venv: str | None,
+    vllm_bin: str,
+    fabric_iface: str | None,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    probes: list[dict[str, Any]] = []
+    for target, ssh_host in _unique_cluster_hosts(execution_commands).items():
+        script = _cluster_preflight_script(
+            venv=venv,
+            vllm_bin=vllm_bin,
+            fabric_iface=fabric_iface,
+        )
+        argv = _cluster_ssh_argv(
+            ssh_bin=ssh_bin,
+            ssh_options=ssh_options,
+            ssh_host=ssh_host,
+            remote_script=script,
+        )
+        result = _run_cluster_subprocess(
+            list(argv),
+            timeout_seconds=timeout_seconds,
+        )
+        probes.append(
+            {
+                "target": target,
+                "ssh_host": ssh_host,
+                "argv": list(argv),
+                "returncode": result.returncode,
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip(),
+            }
+        )
+    failed = [probe for probe in probes if probe["returncode"] != 0]
+    return {
+        "status": "pass" if not failed else "blocked",
+        "passed_hosts": len(probes) - len(failed),
+        "total_hosts": len(probes),
+        "probes": probes,
+    }
+
+
+def _unique_cluster_hosts(execution_commands: tuple[Any, ...]) -> dict[str, str]:
+    hosts: dict[str, str] = {}
+    for command in execution_commands:
+        hosts.setdefault(str(command.target), str(command.ssh_host))
+    return hosts
+
+
+def _cluster_preflight_script(
+    *,
+    venv: str | None,
+    vllm_bin: str,
+    fabric_iface: str | None,
+) -> str:
+    vllm_check = (
+        f"test -x {shlex.quote(vllm_bin)}"
+        if "/" in vllm_bin
+        else f"command -v {shlex.quote(vllm_bin)} >/dev/null"
+    )
+    checks = [
+        "set -e",
+        "hostname",
+        "command -v python3 >/dev/null",
+        "command -v ray >/dev/null",
+        vllm_check,
+        "ulimit -l || true",
+        "command -v nvidia-smi >/dev/null && nvidia-smi -L || true",
+    ]
+    if fabric_iface:
+        checks.append(f"ip -o addr show {shlex.quote(fabric_iface)} >/dev/null")
+    script = " && ".join(checks)
+    return _with_remote_venv(script, venv)
+
+
+def _collect_cluster_ray_continuity(
+    *,
+    plan: Any,
+    execution_commands: tuple[Any, ...],
+    ssh_bin: str,
+    ssh_options: tuple[str, ...],
+    venv: str | None,
+    head_ip: str,
+    ray_port: int,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    head_command = next(
+        (command for command in execution_commands if command.role == "ray-head"),
+        None,
+    )
+    if head_command is None:
+        return {"status": "blocked", "error": "ray-head command not found"}
+    address = f"{head_ip}:{ray_port}"
+    code = (
+        "import json, ray, sys\n"
+        f"ray.init(address={address!r}, ignore_reinit_error=True)\n"
+        "nodes = ray.nodes()\n"
+        "alive = [node for node in nodes if node.get('Alive')]\n"
+        "print(json.dumps({"
+        "'alive_node_count': len(alive), "
+        "'node_count': len(nodes), "
+        "'alive_node_ids': [node.get('NodeID') for node in alive]"
+        "}, sort_keys=True))\n"
+        "ray.shutdown()\n"
+        f"sys.exit(0 if len(alive) >= {int(plan.node_count)} else 1)\n"
+    )
+    script = _with_remote_venv(
+        f"ray status --address={shlex.quote(address)} && python3 -c {shlex.quote(code)}",
+        venv,
+    )
+    argv = _cluster_ssh_argv(
+        ssh_bin=ssh_bin,
+        ssh_options=ssh_options,
+        ssh_host=str(head_command.ssh_host),
+        remote_script=script,
+    )
+    result = _run_cluster_subprocess(
+        list(argv),
+        timeout_seconds=timeout_seconds,
+    )
+    snapshot = _last_json_line(result.stdout)
+    alive_count = snapshot.get("alive_node_count") if isinstance(snapshot, dict) else None
+    ok = (
+        result.returncode == 0
+        and isinstance(alive_count, int)
+        and alive_count >= int(plan.node_count)
+    )
+    return {
+        "status": "pass" if ok else "blocked",
+        "expected_node_count": plan.node_count,
+        "alive_node_count": alive_count,
+        "snapshot": snapshot,
+        "argv": list(argv),
+        "returncode": result.returncode,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+    }
+
+
+def _wait_for_cluster_queue_drain(
+    *,
+    base_url: str,
+    timeout_seconds: float,
+    poll_seconds: float,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    attempts = 0
+    last: dict[str, Any] = {
+        "status": "not_checked",
+        "running": None,
+        "waiting": None,
+    }
+    with httpx.Client(
+        base_url=base_url,
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+    ) as client:
+        while time.time() < deadline:
+            attempts += 1
+            try:
+                response = client.get("/metrics")
+                response.raise_for_status()
+                parsed = _parse_queue_metrics(response.text)
+                last = {**parsed, "attempts": attempts, "base_url": base_url}
+                if parsed["metrics_found"] and parsed["running"] == 0 and parsed["waiting"] == 0:
+                    return {**last, "status": "drained"}
+            except (httpx.HTTPError, ValueError) as exc:
+                last = {
+                    "status": "error",
+                    "attempts": attempts,
+                    "base_url": base_url,
+                    "error": str(exc),
+                }
+            time.sleep(poll_seconds)
+    return {**last, "status": "timeout", "attempts": attempts, "base_url": base_url}
+
+
+def _parse_queue_metrics(text: str) -> dict[str, Any]:
+    running = 0.0
+    waiting = 0.0
+    found_running = False
+    found_waiting = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        metric_name = parts[0].split("{", 1)[0]
+        try:
+            value = float(parts[-1])
+        except ValueError:
+            continue
+        if metric_name in {
+            "vllm:num_requests_running",
+            "vllm_num_requests_running",
+            "num_requests_running",
+        } or metric_name.endswith("num_requests_running"):
+            running += value
+            found_running = True
+        if metric_name in {
+            "vllm:num_requests_waiting",
+            "vllm_num_requests_waiting",
+            "num_requests_waiting",
+        } or metric_name.endswith("num_requests_waiting"):
+            waiting += value
+            found_waiting = True
+    return {
+        "metrics_found": found_running and found_waiting,
+        "running": int(running) if running.is_integer() else running,
+        "waiting": int(waiting) if waiting.is_integer() else waiting,
+    }
+
+
+def _run_cluster_rollback(
+    *,
+    plan: Any,
+    ssh_bin: str,
+    ssh_user: str | None,
+    ssh_options: tuple[str, ...],
+    ssh_host_field: str,
+    timeout_seconds: float,
+    enabled: bool,
+    reason: str,
+) -> dict[str, Any]:
+    if not enabled:
+        return {"status": "skipped", "enabled": False, "reason": reason}
+    rollback_commands = build_cluster_rollback_commands(
+        plan,
+        ssh_bin=ssh_bin,
+        ssh_user=ssh_user,
+        ssh_options=ssh_options,
+        ssh_host_field=ssh_host_field,
+    )
+    steps: list[dict[str, Any]] = []
+    for command in rollback_commands:
+        result = _run_cluster_subprocess(
+            list(command.argv),
+            timeout_seconds=timeout_seconds,
+        )
+        steps.append(
+            {
+                **command.to_dict(),
+                "returncode": result.returncode,
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip(),
+            }
+        )
+    failed = [step for step in steps if step["returncode"] != 0]
+    return {
+        "status": "pass" if not failed else "failed",
+        "enabled": True,
+        "reason": reason,
+        "commands": [command.to_dict() for command in rollback_commands],
+        "execution": steps,
+    }
+
+
+def _cluster_ssh_argv(
+    *,
+    ssh_bin: str,
+    ssh_options: tuple[str, ...],
+    ssh_host: str,
+    remote_script: str,
+) -> tuple[str, ...]:
+    return (
+        ssh_bin,
+        *ssh_options,
+        ssh_host,
+        "bash -lc " + shlex.quote(remote_script),
+    )
+
+
+def _run_cluster_subprocess(
+    argv: list[str],
+    *,
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            argv,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = _timeout_output_to_text(exc.stdout)
+        stderr = _timeout_output_to_text(exc.stderr)
+        timeout_message = f"timed out after {timeout_seconds:g}s"
+        stderr = f"{stderr}\n{timeout_message}".strip()
+        return subprocess.CompletedProcess(argv, 124, stdout=stdout, stderr=stderr)
+
+
+def _timeout_output_to_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _with_remote_venv(script: str, venv: str | None) -> str:
+    if not venv:
+        return script
+    return f"source {shlex.quote(venv)}/bin/activate && {script}"
+
+
+def _last_json_line(text: str) -> dict[str, Any]:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _write_json_output(path: Path | None, payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _wait_for_cluster_vllm_ready(
+    *,
+    base_url: str,
+    served_model_name: str,
+    timeout_seconds: float,
+    poll_seconds: float,
+    generation_smoke: bool,
+    smoke_prompt: str,
+    smoke_expected: str,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last_error = "not checked"
+    attempts = 0
+    with httpx.Client(
+        base_url=base_url,
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+    ) as client:
+        while time.time() < deadline:
+            attempts += 1
+            try:
+                models = client.get("/v1/models")
+                models.raise_for_status()
+                model_ids = _model_ids(models.json())
+                if served_model_name not in model_ids:
+                    last_error = (
+                        f"served model {served_model_name!r} not in /v1/models: "
+                        f"{sorted(model_ids)!r}"
+                    )
+                elif not generation_smoke:
+                    return {
+                        "status": "ready",
+                        "base_url": base_url,
+                        "attempts": attempts,
+                        "models": sorted(model_ids),
+                        "generation_smoke": "skipped",
+                    }
+                else:
+                    smoke = _run_generation_smoke(
+                        client=client,
+                        served_model_name=served_model_name,
+                        smoke_prompt=smoke_prompt,
+                        smoke_expected=smoke_expected,
+                    )
+                    if smoke["ok"]:
+                        return {
+                            "status": "ready",
+                            "base_url": base_url,
+                            "attempts": attempts,
+                            "models": sorted(model_ids),
+                            "generation_smoke": smoke,
+                        }
+                    last_error = str(smoke["error"])
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                last_error = str(exc)
+            time.sleep(poll_seconds)
+    return {
+        "status": "timeout",
+        "base_url": base_url,
+        "attempts": attempts,
+        "last_error": last_error,
+    }
+
+
+def _model_ids(payload: dict[str, Any]) -> set[str]:
+    raw_items = payload.get("data", [])
+    if not isinstance(raw_items, list):
+        raise ValueError("/v1/models response data must be a list")
+    model_ids = {
+        item.get("id")
+        for item in raw_items
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if not model_ids:
+        raise ValueError("/v1/models returned no model ids")
+    return model_ids
+
+
+def _run_generation_smoke(
+    *,
+    client: httpx.Client,
+    served_model_name: str,
+    smoke_prompt: str,
+    smoke_expected: str,
+) -> dict[str, Any]:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": served_model_name,
+            "messages": [{"role": "user", "content": smoke_prompt}],
+            "max_tokens": 16,
+            "temperature": 0,
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    text = _chat_completion_text(payload)
+    if text.strip() == smoke_expected:
+        return {"ok": True, "expected": smoke_expected, "observed": text}
+    return {
+        "ok": False,
+        "expected": smoke_expected,
+        "observed": text,
+        "error": "generation smoke did not match expected text",
+    }
+
+
+def _chat_completion_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("chat completion response has no choices")
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise ValueError("chat completion choice must be an object")
+    message = first.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("chat completion choice has no message")
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise ValueError("chat completion content must be a string")
+    return content
 
 
 @app.command()

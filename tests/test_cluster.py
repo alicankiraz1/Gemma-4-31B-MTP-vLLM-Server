@@ -9,7 +9,10 @@ import pytest
 from gemma4_mtp_vllm.cluster import (
     ClusterNode,
     ClusterTopology,
+    DEFAULT_CLUSTER_SSH_OPTIONS,
+    build_cluster_execution_commands,
     build_cluster_launch_plan,
+    build_cluster_rollback_commands,
     load_cluster_topologies,
     normalize_env_assignments,
     transport_environment,
@@ -56,6 +59,10 @@ def test_cluster_launch_plan_scales_two_four_six_eight_nodes():
         assert plan.commands[-1].target == "spark-01"
         assert f"--tensor-parallel-size {node_count}" in plan.commands[-1].command
         assert f"if len(alive) >= {node_count}" in plan.commands[-1].command
+        assert "VLLM_WORKER_MULTIPROC_METHOD=spawn" in plan.commands[-1].command
+        assert "SAFETENSORS_FAST_GPU=1" in plan.commands[-1].command
+        assert "NVIDIA_TF32_OVERRIDE=1" in plan.commands[-1].command
+        assert "VLLM_LOGGING_LEVEL=INFO" in plan.commands[-1].command
 
 
 def test_socket_and_roce_transport_profiles_are_deduped_and_runtime_bound():
@@ -146,6 +153,80 @@ def test_shell_rendering_round_trips_vllm_serve_command():
     assert "vllm" in parsed
     assert "serve" in parsed
     assert "--speculative-config" in parsed
+
+
+def test_cluster_execution_commands_wrap_plan_for_live_ssh():
+    topology = ClusterTopology(
+        id="dgx-spark-4",
+        label="4x DGX Spark",
+        nodes=tuple(_nodes(4)),
+    )
+    plan = build_cluster_launch_plan(
+        profile=_profile(),
+        topology=topology,
+        node_count=4,
+        runtime_id="run-live-123",
+        transport_profile="socket",
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    commands = build_cluster_execution_commands(
+        plan,
+        ssh_user="operator",
+        ssh_options=("-o", "BatchMode=yes"),
+        ssh_host_field="fabric-ip",
+    )
+
+    assert len(commands) == 5
+    assert commands[0].argv[:4] == (
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "operator@198.51.100.1",
+    )
+    assert commands[0].background is False
+    assert "ray start --head" in commands[0].remote_command
+    assert commands[-1].role == "vllm-serve"
+    assert commands[-1].background is True
+    assert commands[-1].log_path == (
+        "artifacts/cluster-runs/run-live-123/vllm-serve.spark-01.log"
+    )
+    assert "nohup setsid bash -lc" in commands[-1].remote_command
+    assert "disown" in commands[-1].remote_command
+    assert "vllm-serve.spark-01.pid" in commands[-1].remote_command
+    assert "--distributed-executor-backend ray" in commands[-1].remote_command
+    assert "--speculative-config" in commands[-1].remote_command
+    assert "ray stop" not in commands[-1].remote_command
+
+
+def test_cluster_live_helpers_use_safe_default_ssh_and_explicit_rollback():
+    topology = ClusterTopology(
+        id="dgx-spark-2",
+        label="2x DGX Spark",
+        nodes=tuple(_nodes(2)),
+    )
+    plan = build_cluster_launch_plan(
+        profile=_profile(),
+        topology=topology,
+        node_count=2,
+        runtime_id="run-live-123",
+        transport_profile="socket",
+        served_model_name="gemma-4-31b-mtp",
+    )
+
+    commands = build_cluster_execution_commands(plan, ssh_host_field="fabric-ip")
+    assert commands[0].argv[: len(DEFAULT_CLUSTER_SSH_OPTIONS) + 1] == (
+        "ssh",
+        *DEFAULT_CLUSTER_SSH_OPTIONS,
+    )
+
+    rollback = build_cluster_rollback_commands(plan, ssh_host_field="fabric-ip")
+    assert [command.role for command in rollback] == [
+        "rollback-ray-stop",
+        "rollback-ray-stop",
+    ]
+    assert [command.target for command in rollback] == ["spark-02", "spark-01"]
+    assert all("ray stop --force" in command.remote_command for command in rollback)
 
 
 def test_invalid_topologies_are_rejected(tmp_path):

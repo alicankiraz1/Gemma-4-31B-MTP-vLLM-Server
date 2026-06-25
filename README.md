@@ -8,14 +8,14 @@ The repository has three practical surfaces:
 - A local API gateway that exposes OpenAI-compatible and Anthropic-compatible
   endpoints in front of a private `vllm serve` process.
 - NVIDIA CUDA launch profiles for single-GPU and tensor-parallel local serving.
-- Public-safe DGX Spark cluster dry-run planning for 2x and larger NVIDIA
-  clusters.
+- Public-safe DGX Spark cluster planning and explicit live serve execution for
+  2x and larger NVIDIA clusters.
 
 The current release is an alpha. The published runtime benchmark evidence comes
-from a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`; DGX Spark support is
-currently dry-run plan and evidence generation only. The cluster planner does
-not SSH, start Ray, start vLLM, stop services, kill processes, or change the
-default profile.
+from a 2x NVIDIA GeForce RTX 5090 host with vLLM `0.21.0`. DGX Spark support
+has two separate paths: `cluster-plan` remains dry-run-only for review, while
+`cluster-serve` can start a live Ray/vLLM MTP serve flow over SSH when a private
+topology and `--confirm-live` are provided.
 
 ## What This Provides
 
@@ -30,6 +30,9 @@ default profile.
   reproducible JSON artifacts.
 - `vllm-mtp cluster-plan`: builds deterministic dry-run Ray/vLLM launch plans
   for DGX Spark-style clusters.
+- `vllm-mtp cluster-serve`: starts the planned Ray head, Ray workers, and MTP
+  vLLM serve process for private DGX Spark topology files after explicit
+  operator confirmation, SSH preflight, and post-start gates.
 
 ## Current Compatibility
 
@@ -38,8 +41,8 @@ default profile.
 | Gateway-only development | Supported | No GPU required; install with `.[dev]`. |
 | Single 80 GB-class NVIDIA GPU | Profile available | `safe80`; marked `unverified` until hardware evidence is added. |
 | 2x NVIDIA local tensor parallel | Smoke/benchmark evidence | `tp2_2x32_smoke` and `tp2_2x32_fp8_gpuonly` have RTX 5090 evidence. |
-| DGX Spark 2x+ cluster | Dry-run planning | Plans 2, 4, 6, and 8 selected nodes; no live execution in v1. |
-| RoCE-A transport | Explicit dry-run plan only | Requires live operator gates before promotion; socket remains fallback. |
+| DGX Spark 2x+ cluster | Plan and explicit live serve | Plans or starts 2, 4, 6, and 8 selected nodes. |
+| RoCE-A transport | Explicit plan/live option | Requires live operator gates before promotion; socket remains fallback. |
 
 The project is not limited to the 2x RTX 5090 benchmark host. That machine is
 the current real-hardware evidence source for local serving, while the planner
@@ -362,16 +365,113 @@ Example shape:
 }
 ```
 
+## DGX Spark Live Cluster Serve
+
+`vllm-mtp cluster-serve` uses the same plan builder as `cluster-plan`, then
+executes that plan over SSH. This is the direct path for "2/4/6/8 nodes -> MTP
+ready serve".
+
+Live execution requirements:
+
+- `--topology-file` must point at a private inventory file.
+- `--confirm-live` is required because the command starts remote services.
+- `--runtime-id` is required and is used in logs, fingerprints, and evidence.
+- `--node-count` selects the first 2, 4, 6, or 8 nodes from the topology.
+- `--ssh-host-field name|fabric-ip` selects whether SSH targets node names or
+  fabric IPs.
+- With DGX Spark `gpus_per_node: 1`, `tensor_parallel_size` equals
+  `node_count`.
+- MTP is enabled by default through vLLM `--speculative-config`; pass
+  `--no-mtp` only for an explicit baseline.
+
+What it does:
+
+- runs SSH preflight on the selected nodes before launch
+- starts Ray head on the first selected node
+- starts one Ray worker on each remaining selected node
+- starts distributed `vllm serve` on the head node with
+  `--distributed-executor-backend ray`
+- backgrounds the vLLM process with a detached `setsid` launch and writes
+  runtime-scoped serve log and PID files
+- applies the proven cluster runtime env used by the live launcher:
+  `VLLM_WORKER_MULTIPROC_METHOD=spawn`, `SAFETENSORS_FAST_GPU=1`,
+  `NVIDIA_TF32_OVERRIDE=1`, and `VLLM_LOGGING_LEVEL=INFO`
+- waits for `/v1/models` and an exact generation smoke by default
+- checks vLLM queue drain from `/metrics` by default
+- checks Ray node continuity from the head node by default
+- emits a JSON execution report when `--format json` or `--json-output` is used
+
+What it does not do:
+
+- no automatic `ray stop`
+- no broad process kill
+- no service stop/restart
+- no default profile promotion
+- no RoCE-A promotion based on benchmark speed alone
+
+Default SSH execution uses:
+
+```bash
+ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1
+```
+
+Pass repeated `--ssh-option` values only when your cluster needs a different
+policy. Use `--rollback-on-failure` only when you explicitly want failed live
+launches to run the generated `ray stop --force` rollback commands on the
+selected nodes. Rollback is never part of `cluster-plan`.
+
+Socket live serve example:
+
+```bash
+vllm-mtp cluster-serve \
+    --profile tp2_2x32_fp8_gpuonly \
+    --topology-file config/cluster_topologies.private.yaml \
+    --topology dgx-spark-private \
+    --node-count 4 \
+    --runtime-id my-live-runtime-id \
+    --transport-profile socket \
+    --ssh-user operator \
+    --confirm-live \
+    --format json \
+    --json-output artifacts/cluster-runs/my-live-runtime-id/serve.json
+```
+
+RoCE-A live serve is explicit and should keep the same gate discipline:
+
+```bash
+vllm-mtp cluster-serve \
+    --profile tp2_2x32_fp8_gpuonly \
+    --topology-file config/cluster_topologies.private.yaml \
+    --topology dgx-spark-private \
+    --node-count 4 \
+    --runtime-id my-roce-live-runtime-id \
+    --transport-profile roce-a \
+    --fabric-iface fabric0 \
+    --fabric-cidr 198.51.100.0/24 \
+    --ssh-user operator \
+    --confirm-live \
+    --format json \
+    --json-output artifacts/cluster-runs/my-roce-live-runtime-id/serve.json
+```
+
+If the control machine cannot reach the head node's vLLM port directly, use
+`--no-wait-ready --no-queue-drain` and run `vllm-mtp doctor` or an equivalent
+smoke from a machine that can reach the cluster endpoint. Keep Ray continuity
+enabled when SSH to the head node is available. Do not treat skipped endpoint
+gates as RoCE-A promotion.
+
 ### Live promotion gates
 
 For RoCE-A, `/v1/models` is not sufficient health evidence. Promotion requires:
 
 - operator approval before execution
 - dry-run fingerprint matching the target topology
+- SSH preflight on every selected node
 - generation smoke, not just model-list liveness
 - queue drain evidence
 - runtime-bound NCCL log evidence
-- Ray node, actor, and worker continuity
+- Ray node continuity for serve readiness; actor/worker continuity for
+  promotion artifacts when the Ray State API is available
 - soak evidence
 - rollback evidence
 - preserved socket fallback

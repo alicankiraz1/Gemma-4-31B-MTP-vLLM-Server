@@ -19,6 +19,22 @@ DEFAULT_TRANSPORT_PROFILE = "socket"
 DEFAULT_FABRIC_IFACE = "fabric0"
 DEFAULT_FABRIC_CIDR = "198.51.100.0/24"
 DEFAULT_CLUSTER_RUN_ROOT = "artifacts/cluster-runs"
+DEFAULT_CLUSTER_SSH_OPTIONS = (
+    "-n",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=8",
+    "-o",
+    "ConnectionAttempts=1",
+)
+DEFAULT_CLUSTER_VLLM_RUNTIME_ENV = (
+    "VLLM_WORKER_MULTIPROC_METHOD=spawn",
+    "SAFETENSORS_FAST_GPU=1",
+    "NVIDIA_TF32_OVERRIDE=1",
+    "VLLM_LOGGING_LEVEL=INFO",
+)
+SUPPORTED_LIVE_NODE_COUNTS = {2, 4, 6, 8}
 SUPPORTED_TRANSPORT_PROFILES = {"socket", "roce-a"}
 CLUSTER_PLAN_SCHEMA_VERSION = 1
 
@@ -117,6 +133,126 @@ class ClusterLaunchPlan:
             )
             lines.append(command.command)
         return "\n".join(lines) + "\n"
+
+
+@dataclass(frozen=True)
+class ClusterExecutionCommand:
+    target: str
+    role: str
+    rank: int
+    ssh_host: str
+    argv: tuple[str, ...]
+    remote_command: str
+    background: bool = False
+    log_path: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "target": self.target,
+            "role": self.role,
+            "rank": self.rank,
+            "ssh_host": self.ssh_host,
+            "argv": list(self.argv),
+            "remote_command": self.remote_command,
+            "background": self.background,
+        }
+        if self.log_path is not None:
+            payload["log_path"] = self.log_path
+        return payload
+
+
+def build_cluster_execution_commands(
+    plan: ClusterLaunchPlan,
+    *,
+    ssh_bin: str = "ssh",
+    ssh_user: str | None = None,
+    ssh_options: tuple[str, ...] = (),
+    ssh_host_field: str = "name",
+    run_root: str = DEFAULT_CLUSTER_RUN_ROOT,
+) -> tuple[ClusterExecutionCommand, ...]:
+    if ssh_host_field not in {"name", "fabric-ip"}:
+        raise ValueError("ssh_host_field must be name or fabric-ip")
+
+    node_hosts = _execution_hosts(plan, ssh_host_field)
+    resolved_ssh_options = ssh_options or DEFAULT_CLUSTER_SSH_OPTIONS
+    commands: list[ClusterExecutionCommand] = []
+    for command in plan.commands:
+        ssh_host = node_hosts[command.target]
+        if ssh_user:
+            ssh_host = f"{ssh_user}@{ssh_host}"
+        background = command.role == "vllm-serve"
+        log_path = None
+        remote_command = command.command
+        if background:
+            log_path = (
+                f"{run_root.rstrip('/')}/{plan.runtime_id}/"
+                f"{command.role}.{command.target}.log"
+            )
+            remote_command = _background_remote_command(command.command, log_path)
+        argv = _ssh_argv(
+            ssh_bin=ssh_bin,
+            ssh_options=resolved_ssh_options,
+            ssh_host=ssh_host,
+            remote_command=remote_command,
+        )
+        commands.append(
+            ClusterExecutionCommand(
+                target=command.target,
+                role=command.role,
+                rank=command.rank,
+                ssh_host=ssh_host,
+                argv=argv,
+                remote_command=remote_command,
+                background=background,
+                log_path=log_path,
+            )
+        )
+    return tuple(commands)
+
+
+def build_cluster_rollback_commands(
+    plan: ClusterLaunchPlan,
+    *,
+    ssh_bin: str = "ssh",
+    ssh_user: str | None = None,
+    ssh_options: tuple[str, ...] = (),
+    ssh_host_field: str = "name",
+) -> tuple[ClusterExecutionCommand, ...]:
+    if ssh_host_field not in {"name", "fabric-ip"}:
+        raise ValueError("ssh_host_field must be name or fabric-ip")
+
+    node_hosts = _execution_hosts(plan, ssh_host_field)
+    resolved_ssh_options = ssh_options or DEFAULT_CLUSTER_SSH_OPTIONS
+    commands: list[ClusterExecutionCommand] = []
+    raw_nodes = plan.topology.get("nodes")
+    if not isinstance(raw_nodes, list):
+        raise ValueError("plan topology nodes must be a list")
+    for rank, raw_node in enumerate(reversed(raw_nodes)):
+        if not isinstance(raw_node, dict):
+            raise ValueError("plan topology node entries must be mappings")
+        target = raw_node.get("name")
+        if not isinstance(target, str):
+            raise ValueError("plan topology nodes must include name")
+        ssh_host = node_hosts[target]
+        if ssh_user:
+            ssh_host = f"{ssh_user}@{ssh_host}"
+        remote_command = "ray stop --force"
+        commands.append(
+            ClusterExecutionCommand(
+                target=target,
+                role="rollback-ray-stop",
+                rank=rank,
+                ssh_host=ssh_host,
+                argv=_ssh_argv(
+                    ssh_bin=ssh_bin,
+                    ssh_options=resolved_ssh_options,
+                    ssh_host=ssh_host,
+                    remote_command=remote_command,
+                ),
+                remote_command=remote_command,
+            )
+        )
+    return tuple(commands)
 
 
 def load_cluster_topologies(path: Path | None = None) -> dict[str, ClusterTopology]:
@@ -233,6 +369,7 @@ def build_cluster_launch_plan(
             head_ip=resolved_head_ip,
             port=port,
             ray_port=ray_port,
+            runtime_id=runtime_id,
             vllm_bin=vllm_bin,
             venv=venv,
             model_path=model_path,
@@ -292,6 +429,7 @@ def _build_commands(
     head_ip: str,
     port: int,
     ray_port: int,
+    runtime_id: str,
     vllm_bin: str,
     venv: str | None,
     model_path: str | None,
@@ -303,12 +441,14 @@ def _build_commands(
     enable_mtp: bool,
 ) -> Iterable[ClusterLaunchCommand]:
     env_prefix = _env_prefix(environment)
+    log_preamble = _cluster_log_preamble(environment, runtime_id)
     yield ClusterLaunchCommand(
         target=nodes[0].name,
         role="ray-head",
         rank=0,
         command=_with_venv(
             (
+                f"{log_preamble}"
                 f"{env_prefix}"
                 f"ray start --head --node-ip-address={shlex.quote(head_ip)} "
                 f"--port={ray_port}"
@@ -323,6 +463,7 @@ def _build_commands(
             rank=rank,
             command=_with_venv(
                 (
+                    f"{log_preamble}"
                     f"{env_prefix}"
                     f"ray start --address={shlex.quote(head_ip)}:{ray_port} "
                     f"--node-ip-address={shlex.quote(node.fabric_ip)}"
@@ -344,15 +485,19 @@ def _build_commands(
         max_num_batched_tokens=max_num_batched_tokens,
         enable_mtp=enable_mtp,
     )
+    serve_environment = tuple(
+        normalize_env_assignments([*environment, *DEFAULT_CLUSTER_VLLM_RUNTIME_ENV])
+    )
     yield ClusterLaunchCommand(
         target=nodes[0].name,
         role="vllm-serve",
         rank=0,
         command=_with_venv(
             (
+                f"{log_preamble}"
                 f"ray status --address={shlex.quote(head_ip)}:{ray_port} && "
                 f"{_ray_wait_command(head_ip, ray_port, len(nodes))} && "
-                f"{_env_prefix(environment)}{shlex.join(serve_args)}"
+                f"{_env_prefix(serve_environment)}{shlex.join(serve_args)}"
             ),
             venv,
         ),
@@ -475,6 +620,13 @@ def _with_venv(command: str, venv: str | None) -> str:
     return f"source {shlex.quote(venv)}/bin/activate && {command}"
 
 
+def _cluster_log_preamble(environment: tuple[str, ...], runtime_id: str) -> str:
+    if not any(item.startswith("NCCL_DEBUG_FILE=") for item in environment):
+        return ""
+    nccl_dir = f"${{GEMMA4_MTP_RUN_ROOT:-{DEFAULT_CLUSTER_RUN_ROOT}}}/{runtime_id}/nccl"
+    return f"mkdir -p {nccl_dir} && "
+
+
 def _ray_wait_command(head_ip: str, ray_port: int, expected_nodes: int) -> str:
     code = (
         "import ray, sys, time\n"
@@ -516,6 +668,56 @@ def _expected_live_gates(transport_profile: str) -> tuple[str, ...]:
             ]
         )
     return tuple(gates)
+
+
+def _execution_hosts(
+    plan: ClusterLaunchPlan,
+    ssh_host_field: str,
+) -> dict[str, str]:
+    hosts: dict[str, str] = {}
+    raw_nodes = plan.topology.get("nodes")
+    if not isinstance(raw_nodes, list):
+        raise ValueError("plan topology nodes must be a list")
+    for raw_node in raw_nodes:
+        if not isinstance(raw_node, dict):
+            raise ValueError("plan topology node entries must be mappings")
+        name = raw_node.get("name")
+        fabric_ip = raw_node.get("fabric_ip")
+        if not isinstance(name, str) or not isinstance(fabric_ip, str):
+            raise ValueError("plan topology nodes must include name and fabric_ip")
+        hosts[name] = name if ssh_host_field == "name" else fabric_ip
+    return hosts
+
+
+def _background_remote_command(command: str, log_path: str) -> str:
+    log_dir = str(Path(log_path).parent)
+    log_stem = Path(log_path).stem
+    pid_path = str(Path(log_path).with_suffix(".pid"))
+    return (
+        f"mkdir -p {shlex.quote(log_dir)} && "
+        f"if [ -e {shlex.quote(log_path)} ]; then "
+        f"mv {shlex.quote(log_path)} "
+        f"{shlex.quote(log_dir)}/{shlex.quote(log_stem)}-$(date -u +%Y%m%dT%H%M%SZ).log; "
+        "fi; "
+        f"nohup setsid bash -lc {shlex.quote(command)} "
+        f"> {shlex.quote(log_path)} 2>&1 < /dev/null & "
+        f"echo $! > {shlex.quote(pid_path)}; disown; cat {shlex.quote(pid_path)}"
+    )
+
+
+def _ssh_argv(
+    *,
+    ssh_bin: str,
+    ssh_options: tuple[str, ...],
+    ssh_host: str,
+    remote_command: str,
+) -> tuple[str, ...]:
+    return (
+        ssh_bin,
+        *ssh_options,
+        ssh_host,
+        "bash -lc " + shlex.quote(remote_command),
+    )
 
 
 def _sha256_json(payload: object) -> str:

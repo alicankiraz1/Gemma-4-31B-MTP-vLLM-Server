@@ -3,8 +3,10 @@
 ## Snapshot
 
 - Branch: `codex/p2-001-dgx-spark-cluster-compat`
-- Scope: public-safe dry-run planning for 2x and larger DGX Spark clusters.
-- Live execution: not implemented.
+- Scope: public-safe dry-run planning plus explicit live serve execution for
+  2x, 4x, 6x, and 8x DGX Spark-style clusters.
+- Live execution: implemented through `vllm-mtp cluster-serve`; requires a
+  private topology file and `--confirm-live`.
 - GPU-consuming commands: not run.
 - Runtime upgrade: not run; the existing vLLM `0.21.0` package pin remains.
 - Default profile change: not run.
@@ -51,6 +53,37 @@ The generated command roles are:
 - `ray-worker`: starts one Ray worker command per remaining selected node.
 - `vllm-serve`: waits for Ray node count and then prints a distributed
   `vllm serve` command with `--distributed-executor-backend ray`.
+
+## Live Serve Contract
+
+`vllm-mtp cluster-serve` executes the same plan over SSH only after explicit
+operator confirmation:
+
+```bash
+vllm-mtp cluster-serve \
+  --profile tp2_2x32_fp8_gpuonly \
+  --topology-file config/cluster_topologies.private.yaml \
+  --topology dgx-spark-private \
+  --node-count 4 \
+  --runtime-id my-live-runtime \
+  --transport-profile socket \
+  --ssh-user operator \
+  --confirm-live \
+  --format json
+```
+
+Public-safe live execution rules:
+
+- supported live node counts are exactly `2`, `4`, `6`, and `8`;
+- private topology is mandatory;
+- MTP is enabled by default through vLLM `--speculative-config`;
+- `cluster-serve` runs SSH preflight before launch;
+- vLLM is launched detached with runtime-scoped log and PID evidence;
+- `/v1/models` is not enough: exact generation smoke, queue drain, and Ray
+  continuity are separate gates by default;
+- rollback is explicit through `--rollback-on-failure` and is never part of the
+  dry-run plan;
+- no default/live profile promotion happens.
 
 ## Transport Profiles
 
